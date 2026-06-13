@@ -109,8 +109,9 @@ body { background: #060b14; }
 }
 
 /* ── TITLEBAR ── */
-.titlebar { height:44px;display:flex;align-items:center;justify-content:space-between;padding:0 18px;z-index:200;flex-shrink:0;background:rgba(0,0,0,0.18);border-bottom:1px solid rgba(255,255,255,0.055);cursor:default; }
-.titlebar-left { display:flex;align-items:center;gap:9px; }
+.titlebar { height:44px;display:flex;align-items:center;padding:0 18px;z-index:200;flex-shrink:0;background:rgba(0,0,0,0.18);border-bottom:1px solid rgba(255,255,255,0.055); }
+.titlebar-left { display:flex;align-items:center;gap:9px;cursor:default; }
+.titlebar-drag { flex:1;height:100%;cursor:default; }
 .logo-mark { width:20px;height:20px;display:grid;grid-template-columns:1fr 1fr;gap:2px; }
 .logo-mark span { border-radius:3px;background:var(--accent); }
 .logo-mark span:nth-child(2) { opacity:0.55; }
