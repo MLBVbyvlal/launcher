@@ -370,6 +370,56 @@ fn reinstall_instance(instance_name: String, full_wipe: bool) -> Result<(), Stri
     Ok(())
 }
 
+// ── Update check ─────────────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct ReleaseInfo {
+    version:  String,
+    tag_name: String,
+    body:     String,
+    html_url: String,
+}
+
+fn parse_semver(v: &str) -> (u64, u64, u64) {
+    let v = v.trim_start_matches('v');
+    let mut parts = v.splitn(3, '.').map(|p| p.parse().unwrap_or(0));
+    (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
+}
+
+#[tauri::command]
+async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
+    let current = env!("CARGO_PKG_VERSION");
+    let client = reqwest::Client::builder()
+        .user_agent("MLBV/1.0")
+        .build().map_err(|e| e.to_string())?;
+    let releases: Vec<serde_json::Value> = client
+        .get("https://api.github.com/repos/MLBVbyvlal/launcher/releases")
+        .header("Accept", "application/vnd.github+json")
+        .send().await.map_err(|e| e.to_string())?
+        .json().await.map_err(|e| e.to_string())?;
+    // First non-draft published release (includes pre-releases/betas)
+    let release = releases.iter()
+        .find(|r| !r["draft"].as_bool().unwrap_or(false))
+        .ok_or_else(|| "No releases found".to_string())?;
+    let tag = release["tag_name"].as_str().unwrap_or("").to_string();
+    let ver = tag.trim_start_matches('v');
+    if parse_semver(ver) <= parse_semver(current) {
+        return Ok(None);
+    }
+    Ok(Some(ReleaseInfo {
+        version:  ver.to_string(),
+        tag_name: tag,
+        body:     release["body"].as_str().unwrap_or("").to_string(),
+        html_url: release["html_url"].as_str().unwrap_or("").to_string(),
+    }))
+}
+
+#[tauri::command]
+fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 fn cancel_download(app: tauri::AppHandle) {
     use std::sync::atomic::Ordering;
@@ -416,6 +466,8 @@ pub fn run() {
             read_instance_log,
             open_instance_logs_folder,
             reinstall_instance,
+            check_for_update,
+            open_url,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

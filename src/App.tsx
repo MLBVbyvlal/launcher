@@ -15,9 +15,10 @@ type Account   = { type: 'offline' | 'microsoft'; username: string; uuid: string
 type MCVersion = { id: string; type: 'release' | 'snapshot' | 'old_alpha' | 'old_beta'; releaseTime: string }
 type LBVersion = { tag: string; mcVersion: string; date: string; buildId?: number }
 type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number }
-type VFilter   = 'release' | 'snapshot' | 'old' | 'all'
-type AppState  = 'loading' | 'ready' | 'error'
-type Tab       = 'mc' | 'lb'
+type VFilter    = 'release' | 'snapshot' | 'old' | 'all'
+type AppState   = 'loading' | 'ready' | 'error'
+type Tab        = 'mc' | 'lb'
+type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string }
 
 const spring = { type: 'spring', stiffness: 400, damping: 30 } as const
 
@@ -105,6 +106,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [dangerOpen, setDangerOpen]         = useState(false)
   const [countdown, setCountdown]           = useState(5)
   const [deleting, setDeleting]             = useState(false)
+  const [updateStatus, setUpdateStatus]     = useState<'idle' | 'checking' | 'uptodate' | { version: string; htmlUrl: string }>('idle')
 
   useEffect(() => {
     if (isTauri) {
@@ -141,6 +143,18 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     localStorage.clear()
     if (isTauri) { try { await invoke('reset_all_data') } catch { /* ignore */ } }
     window.location.reload()
+  }
+
+  const handleManualUpdateCheck = async () => {
+    if (!isTauri) return
+    setUpdateStatus('checking')
+    try {
+      type RawRelease = { version: string; tag_name: string; body: string; html_url: string }
+      const r = await invoke<RawRelease | null>('check_for_update')
+      setUpdateStatus(r ? { version: r.version, htmlUrl: r.html_url } : 'uptodate')
+    } catch {
+      setUpdateStatus('idle')
+    }
   }
 
   const JAVA_REQS = [
@@ -330,8 +344,26 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                       This launcher is not affiliated with, sponsored by, or endorsed by the LiquidBounce team or CCBlueX.
                     </p>
                     <div className="about-info">
-                      <span className="about-ver">MLBV v0.0.1 beta</span>
+                      <span className="about-ver">MLBV v0.1.0</span>
                       <span className="about-stack">Tauri v2 · Rust · React · TypeScript</span>
+                    </div>
+                    <div className="about-update-row">
+                      <button className="btn-secondary" onClick={handleManualUpdateCheck}
+                        disabled={updateStatus === 'checking'}>
+                        {updateStatus === 'checking' ? 'Checking…' : 'Check for updates'}
+                      </button>
+                      {updateStatus === 'uptodate' && (
+                        <span className="about-update-ok">You're up to date</span>
+                      )}
+                      {typeof updateStatus === 'object' && (
+                        <span className="about-update-avail">
+                          v{updateStatus.version} available —{' '}
+                          <button className="about-update-link"
+                            onClick={() => isTauri && invoke('open_url', { url: updateStatus.htmlUrl }).catch(() => {})}>
+                            Download
+                          </button>
+                        </span>
+                      )}
                     </div>
                     <div className="about-by">by vlal.</div>
                   </div>
@@ -623,7 +655,6 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
 type CrashInfo = { exitCode: number; log: string; logPath: string; instanceName?: string }
 
 function CrashDialog({ info, onClose }: { info: CrashInfo; onClose: () => void }) {
-  const isLb = info.instanceName ? false : false // determined by caller via className
   return (
     <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
       <motion.div className="modal glass crash-modal"
@@ -837,6 +868,43 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
   )
 }
 
+// ─── Update Modal ─────────────────────────────────────────────────────────────
+
+function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void }) {
+  const handleDownload = () => {
+    if (isTauri) invoke('open_url', { url: info.htmlUrl }).catch(() => {})
+    onClose()
+  }
+  return (
+    <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      onClick={onClose}
+    >
+      <motion.div className="modal glass update-modal"
+        initial={{ opacity: 0, scale: 0.9, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.9, y: 16 }} transition={spring}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <div>
+            <span className="modal-title">Update available</span>
+            <span className="update-tag-badge">v{info.version}</span>
+          </div>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        {info.body ? (
+          <pre className="update-changelog">{info.body.trim()}</pre>
+        ) : (
+          <p className="update-nobody">No release notes provided.</p>
+        )}
+        <div className="inst-modal-footer">
+          <button className="btn-cancel" onClick={onClose}>Later</button>
+          <button className="btn-ok" onClick={handleDownload}>Download</button>
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
+
 // ─── Main App ─────────────────────────────────────────────────────────────────
 
 export default function App() {
@@ -921,6 +989,9 @@ export default function App() {
   const [dlPaused, setDlPaused]               = useState(false)
   const [dlSpeedBps, setDlSpeedBps]           = useState(0)
 
+  // Update check
+  const [updateInfo, setUpdateInfo]           = useState<UpdateInfo | null>(null)
+
   // Crash dialog
   const [crashInfo, setCrashInfo]             = useState<CrashInfo | null>(null)
   const lastLaunchedInst = useRef<Instance | null>(null)
@@ -971,6 +1042,14 @@ export default function App() {
 
   useEffect(() => { fetchVersions() }, [fetchVersions])
 
+  // Check for updates once the app is ready
+  useEffect(() => {
+    if (appState !== 'ready' || !isTauri) return
+    type RawRelease = { version: string; tag_name: string; body: string; html_url: string }
+    invoke<RawRelease | null>('check_for_update')
+      .then(r => { if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url }) })
+      .catch(() => {})
+  }, [appState])
 
   // ── Accounts ─────────────────────────────────────────────────────────────
   const addOffline = () => {
@@ -1742,6 +1821,13 @@ export default function App() {
         <AnimatePresence>
           {crashInfo && (
             <CrashDialog info={crashInfo} onClose={() => setCrashInfo(null)} />
+          )}
+        </AnimatePresence>
+
+        {/* ── UPDATE MODAL ── */}
+        <AnimatePresence>
+          {updateInfo && (
+            <UpdateModal info={updateInfo} onClose={() => setUpdateInfo(null)} />
           )}
         </AnimatePresence>
 
