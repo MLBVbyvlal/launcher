@@ -39,5 +39,13 @@ Thumbs.db
 CLAUDE.md
 .claude/
 
+# Compiled installers and binaries — upload to GitHub Releases, not the repo
+*.exe
+*.msi
+*.dmg
+*.deb
+*.AppImage
+*.rpm
+
 # VS Code workspace settings (user-specific)
 .vscode/

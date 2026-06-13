@@ -85,13 +85,13 @@ On every startup the launcher checks the GitHub Releases page for a newer versio
 
 All launcher data is stored in `%APPDATA%\mlbv\` on Windows or `~/.mlbv/` on Linux. Nothing is written to the project folder or to the standard `.minecraft` directory — they stay completely separate. Shared libraries and assets go into `mlbv\shared\`, and each instance's saves, mods, and options live in `mlbv\instances\{name}\`.
 
-Account tokens are stored in the WebView's localStorage (`%APPDATA%\com.vlal.mlbv\` on Windows). This is per-machine and is never synced, exported, or included in any build output.
+Account tokens are stored in the WebView's localStorage (`%APPDATA%\com.vlalikoffc.mlbv\` on Windows). This is per-machine and is never synced, exported, or included in any build output.
 
 ---
 
 ## Download
 
-Get the latest installer from the [Releases](https://github.com/MLBVbyvlal/launcher/releases) page.
+Get the latest installer from the [Releases](https://github.com/MLBVbyvlalikoffc/launcher/releases) page.
 
 ---
 
@@ -100,7 +100,7 @@ Get the latest installer from the [Releases](https://github.com/MLBVbyvlal/launc
 Requirements: [Rust](https://rustup.rs), [Node.js](https://nodejs.org) 18+, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS (on Windows this is WebView2 and the VS C++ build tools — both usually already present).
 
 ```sh
-git clone https://github.com/MLBVbyvlal/launcher.git
+git clone https://github.com/MLBVbyvlalikoffc/launcher.git
 cd launcher
 npm install
 cargo tauri build
@@ -130,4 +130,4 @@ cargo tauri dev
 
 This project is licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE) for the full text.
 
-In short: free to use, modify, and distribute. Derivative works must also be open source under the same license. You must credit the original author (vlal).
+In short: free to use, modify, and distribute. Derivative works must also be open source under the same license. You must credit the original author (vlalikoffc).
