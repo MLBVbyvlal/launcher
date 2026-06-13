@@ -1203,9 +1203,9 @@ export default function App() {
           </div>
           <div className="titlebar-drag" />
           <div className="win-controls">
-            <button className="wc min" onClick={winControls.minimize}><span className="wc-icon">−</span></button>
-            <button className="wc max" onClick={winControls.maximize}><span className="wc-icon">⊡</span></button>
-            <button className="wc cls" onClick={winControls.close}><span className="wc-icon">✕</span></button>
+            <button className="wc min" onClick={winControls.minimize}>─</button>
+            <button className="wc max" onClick={winControls.maximize}>□</button>
+            <button className="wc cls" onClick={winControls.close}>✕</button>
           </div>
         </div>
 
