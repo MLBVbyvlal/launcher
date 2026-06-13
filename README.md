@@ -1,6 +1,6 @@
 # MLBV — Minecraft Launcher
 
-A custom Minecraft launcher built with Tauri (Rust + React). Supports vanilla Minecraft and has LiquidBounce built in as a first-class option for HvH servers.
+A custom Minecraft launcher built with Tauri (Rust + React). Supports vanilla Minecraft and has LiquidBounce built in as a first-class option.
 
 ---
 
@@ -60,9 +60,7 @@ MLBV manages everything the official Minecraft launcher does, but with a cleaner
 
 ### LiquidBounce integration
 
-LiquidBounce is a free, open-source Minecraft utility mod with over 200 modules — combat, movement, render, and more. MLBV integrates it directly. Pick a branch (nextgen or legacy) and a version, and the launcher downloads and configures everything through the official LiquidBounce API. No manual Fabric installation, no copying jars around.
-
-This launcher is built for use on HvH (Hack vs Hack) private servers where all players knowingly use mods. That is the purpose of those servers. It is not intended for and should not be used on regular servers where other players have not consented.
+LiquidBounce is a free, open-source utility mod for Minecraft. MLBV integrates it directly — pick a branch (nextgen or legacy) and a version, and the launcher downloads and sets everything up through the official LiquidBounce API. No manual Fabric installation, no copying jars around.
 
 > MLBV is an independent project and is not affiliated with, sponsored by, or endorsed by the LiquidBounce team or CCBlueX.
 
@@ -130,4 +128,6 @@ cargo tauri dev
 
 ## License
 
-MIT
+This project is licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE) for the full text.
+
+In short: free to use, modify, and distribute. Derivative works must also be open source under the same license. You must credit the original author (vlal).

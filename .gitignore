@@ -34,3 +34,10 @@ src-tauri/gen/
 
 # OS
 Thumbs.db
+
+# Claude Code project instructions and session data — contains internal context
+CLAUDE.md
+.claude/
+
+# VS Code workspace settings (user-specific)
+.vscode/
