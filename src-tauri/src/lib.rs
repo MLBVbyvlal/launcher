@@ -644,6 +644,7 @@ fn poll_console(log_path: String, offset: u64) -> PollResult {
 async fn launch_fabric_game(
     app: tauri::AppHandle,
     version_id: String,
+    loader_version: String,
     instance_name: String,
     username: String,
     uuid: String,
@@ -653,7 +654,159 @@ async fn launch_fabric_game(
     max_ram_mb: u32,
 ) -> Result<(), String> {
     launcher::run_fabric(
-        app, version_id, instance_name, username, uuid, offline, access_token,
+        app, version_id, loader_version, instance_name, username, uuid, offline, access_token,
+        concurrent_downloads, max_ram_mb,
+    ).await.map_err(|e| e.to_string())
+}
+
+#[derive(serde::Serialize)]
+struct ModInfo {
+    filename: String,
+}
+
+#[tauri::command]
+fn list_mods(instance_name: String) -> Vec<ModInfo> {
+    let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
+    if !mods_dir.exists() { return vec![]; }
+    std::fs::read_dir(&mods_dir)
+        .map(|rd| {
+            rd.flatten()
+                .filter_map(|e| {
+                    let name = e.file_name().to_string_lossy().into_owned();
+                    if name.ends_with(".jar") { Some(ModInfo { filename: name }) }
+                    else { None }
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+#[tauri::command]
+fn delete_mods(instance_name: String, filenames: Vec<String>) -> Result<(), String> {
+    let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
+    for filename in &filenames {
+        if filename.contains('/') || filename.contains('\\') { continue; }
+        let path = mods_dir.join(filename);
+        if path.exists() {
+            std::fs::remove_file(&path).map_err(|e| format!("Cannot delete {filename}: {e}"))?;
+        }
+    }
+    Ok(())
+}
+
+#[tauri::command]
+fn add_mod_file(instance_name: String, filename: String, data: Vec<u8>) -> Result<(), String> {
+    let safe: String = filename.chars().filter(|&c| c != '/' && c != '\\' && c != '\0').collect();
+    if !safe.ends_with(".jar") { return Err("Only .jar files are supported".to_string()); }
+    let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
+    std::fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
+    std::fs::write(mods_dir.join(&safe), &data).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[tauri::command]
+fn open_mods_folder(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
+    std::fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
+    app.opener()
+       .open_path(mods_dir.to_string_lossy().as_ref(), None::<&str>)
+       .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+fn delete_instance_data(instance_name: String) -> Result<(), String> {
+    let inst_dir = launcher::instances_dir().join(&instance_name);
+    if inst_dir.exists() {
+        std::fs::remove_dir_all(&inst_dir).map_err(|e| e.to_string())?;
+    }
+    Ok(())
+}
+
+#[tauri::command]
+async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<String>, String> {
+    let client = reqwest::Client::builder()
+        .user_agent("MLBV/1.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+
+    match loader.as_str() {
+        "fabric" => {
+            let url = format!("https://meta.fabricmc.net/v2/versions/loader/{}", mc_ver);
+            let data: serde_json::Value = client.get(&url).send().await
+                .map_err(|e| e.to_string())?
+                .json().await.map_err(|e| e.to_string())?;
+            Ok(data.as_array().map(|arr| arr.iter()
+                .filter_map(|v| v["loader"]["version"].as_str().map(|s| s.to_string()))
+                .collect()).unwrap_or_default())
+        }
+        "quilt" => {
+            let url = format!("https://meta.quiltmc.org/v3/versions/loader/{}", mc_ver);
+            let data: serde_json::Value = client.get(&url).send().await
+                .map_err(|e| e.to_string())?
+                .json().await.map_err(|e| e.to_string())?;
+            Ok(data.as_array().map(|arr| arr.iter()
+                .filter_map(|v| v["loader"]["version"].as_str().map(|s| s.to_string()))
+                .collect()).unwrap_or_default())
+        }
+        "forge" => {
+            let xml = client
+                .get("https://maven.minecraftforge.net/net/minecraftforge/forge/maven-metadata.xml")
+                .send().await.map_err(|e| e.to_string())?
+                .text().await.map_err(|e| e.to_string())?;
+            let prefix = format!("{}-", mc_ver);
+            let versions: Vec<String> = xml.lines()
+                .filter_map(|l| {
+                    let l = l.trim();
+                    if l.starts_with("<version>") && l.ends_with("</version>") {
+                        Some(l[9..l.len()-10].to_string())
+                    } else { None }
+                })
+                .filter(|v| v.starts_with(&prefix))
+                .rev().take(20).collect();
+            Ok(versions)
+        }
+        "neoforge" => {
+            let xml = client
+                .get("https://maven.neoforged.net/releases/net/neoforged/neoforge/maven-metadata.xml")
+                .send().await.map_err(|e| e.to_string())?
+                .text().await.map_err(|e| e.to_string())?;
+            let parts: Vec<&str> = mc_ver.split('.').collect();
+            let prefix = match parts.as_slice() {
+                [_, b, c] => format!("{}.{}.", b, c),
+                [_, b] => format!("{}.", b),
+                _ => return Err(format!("Invalid MC version: {mc_ver}")),
+            };
+            let versions: Vec<String> = xml.lines()
+                .filter_map(|l| {
+                    let l = l.trim();
+                    if l.starts_with("<version>") && l.ends_with("</version>") {
+                        Some(l[9..l.len()-10].to_string())
+                    } else { None }
+                })
+                .filter(|v| v.starts_with(&prefix))
+                .rev().take(20).collect();
+            Ok(versions)
+        }
+        _ => Err(format!("Unknown loader: {loader}")),
+    }
+}
+
+#[tauri::command]
+async fn launch_quilt_game(
+    app: tauri::AppHandle,
+    version_id: String,
+    loader_version: String,
+    instance_name: String,
+    username: String,
+    uuid: String,
+    offline: bool,
+    access_token: String,
+    concurrent_downloads: u32,
+    max_ram_mb: u32,
+) -> Result<(), String> {
+    launcher::run_quilt(
+        app, version_id, loader_version, instance_name, username, uuid, offline, access_token,
         concurrent_downloads, max_ram_mb,
     ).await.map_err(|e| e.to_string())
 }
@@ -692,6 +845,13 @@ pub fn run() {
             open_console_window,
             get_console_info,
             poll_console,
+            list_mods,
+            delete_mods,
+            add_mod_file,
+            open_mods_folder,
+            delete_instance_data,
+            get_loader_versions,
+            launch_quilt_game,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

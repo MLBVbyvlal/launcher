@@ -14,7 +14,7 @@ import './App.css'
 type Account   = { type: 'offline' | 'microsoft'; username: string; uuid: string; accessToken?: string }
 type MCVersion = { id: string; type: 'release' | 'snapshot' | 'old_alpha' | 'old_beta'; releaseTime: string }
 type LBVersion = { tag: string; mcVersion: string; date: string; buildId?: number }
-type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number; loader?: 'vanilla' | 'fabric' }
+type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number; loader?: 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'; loaderVersion?: string }
 type VFilter    = 'release' | 'snapshot' | 'old' | 'all'
 type AppState   = 'loading' | 'ready' | 'error'
 type Tab        = 'mc' | 'lb'
@@ -34,8 +34,17 @@ const tick = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
 // ─── Tooltip ─────────────────────────────────────────────────────────────────
 
 function Tip({ text }: { text: string }) {
+  const [pos, setPos] = useState<'right' | 'left' | 'top'>('right')
   return (
-    <span className="tip-wrap">
+    <span className={`tip-wrap tip-pos-${pos}`}
+      onMouseEnter={e => {
+        const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+        const spaceRight = window.innerWidth - r.right
+        if (spaceRight < 240 && r.left > 240) setPos('left')
+        else if (spaceRight < 240) setPos('top')
+        else setPos('right')
+      }}
+    >
       <svg className="tip-icon" viewBox="0 0 16 16" fill="none">
         <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.1"/>
         <path d="M8 7.5v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
@@ -75,10 +84,12 @@ function applyAccent(hex: string, applyToLb = false) {
     root.setProperty('--lb-accent', hex)
     root.setProperty('--lb-accent-dark', dark)
     root.setProperty('--lb-glow', glow)
+    root.setProperty('--lb-accent-rgb', `${r} ${g} ${b}`)
   } else {
     root.setProperty('--lb-accent', '#4c8bf5')
     root.setProperty('--lb-accent-dark', '#2563eb')
     root.setProperty('--lb-glow', 'rgba(76,139,245,0.38)')
+    root.setProperty('--lb-accent-rgb', '76 139 245')
   }
 }
 
@@ -608,8 +619,11 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   onClose: () => void
 }) {
   const [instType, setInstType]       = useState<Tab>(defaultTab)
-  const [step, setStep]               = useState<1 | 2>(1)
-  const [selectedLoader, setSelectedLoader] = useState<'vanilla' | 'fabric'>('vanilla')
+  const [step, setStep]               = useState<1 | 2 | 3>(1)
+  const [selectedLoader, setSelectedLoader] = useState<'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'>('vanilla')
+  const [loaderVersions, setLoaderVersions] = useState<string[]>([])
+  const [loaderVerLoading, setLoaderVerLoading] = useState(false)
+  const [selectedLoaderVer, setSelectedLoaderVer] = useState<string>('')
   const [vFilter, setVFilter]         = useState<VFilter>('release')
   const [selVer, setSelVer]           = useState<string>('')
   const [name, setName]               = useState('')
@@ -686,8 +700,10 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
     }
   }, [currentLbVersions.length, instType]) // eslint-disable-line react-hooks/exhaustive-deps
 
+  const loaderSuffix = selectedLoader !== 'vanilla'
+    ? ` (${selectedLoader.charAt(0).toUpperCase() + selectedLoader.slice(1)})` : ''
   const autoName = instType === 'mc'
-    ? (selectedLoader === 'fabric' ? `Minecraft ${selVer} (Fabric)` : `Minecraft ${selVer}`)
+    ? `Minecraft ${selVer}${loaderSuffix}`
     : `LiquidBounce ${selVer}`
 
   const displayName = nameEdited ? name : autoName
@@ -718,6 +734,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
       mcVersion: mcVer,
       buildId: lbBuild?.buildId,
       loader: instType === 'mc' ? selectedLoader : undefined,
+      loaderVersion: (instType === 'mc' && selectedLoader !== 'vanilla') ? selectedLoaderVer : undefined,
     })
     onClose()
   }
@@ -767,37 +784,54 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
               ))}
             </div>
           </>
-          ) : (
+          ) : step === 2 ? (
           <>
             <div className="loader-grid">
               {([
-                { id: 'vanilla', icon: '🌿', label: t('inst.loader.vanilla'), desc: t('inst.loader.vanilla_desc'), enabled: true },
-                { id: 'fabric',  icon: '🧵', label: t('inst.loader.fabric'),  desc: t('inst.loader.fabric_desc'),  enabled: true },
-                { id: 'forge',   icon: '⚒️', label: 'Forge',   desc: t('inst.loader.soon'), enabled: false },
-                { id: 'neoforge',icon: '🔥', label: 'NeoForge',desc: t('inst.loader.soon'), enabled: false },
-              ] as const).map(opt => (
+                { id: 'vanilla',  icon: '🌿', label: t('inst.loader.vanilla'),  desc: t('inst.loader.vanilla_desc') },
+                { id: 'fabric',   icon: '🧵', label: t('inst.loader.fabric'),   desc: t('inst.loader.fabric_desc') },
+                { id: 'quilt',    icon: '🪡', label: 'Quilt',    desc: 'Quilt mod loader' },
+                { id: 'forge',    icon: '⚒️', label: 'Forge',    desc: 'Forge mod loader' },
+                { id: 'neoforge', icon: '🔥', label: 'NeoForge', desc: 'NeoForge mod loader' },
+              ]).map(opt => (
                 <div key={opt.id}
-                  className={[
-                    'loader-opt',
-                    !opt.enabled ? 'loader-disabled' : '',
-                    opt.enabled && selectedLoader === opt.id ? 'loader-selected' : '',
-                  ].filter(Boolean).join(' ')}
-                  onClick={() => opt.enabled && setSelectedLoader(opt.id as 'vanilla' | 'fabric')}
+                  className={['loader-opt', selectedLoader === opt.id ? 'loader-selected' : ''].filter(Boolean).join(' ')}
+                  onClick={() => setSelectedLoader(opt.id as typeof selectedLoader)}
                 >
                   <div className="loader-icon">{opt.icon}</div>
                   <div className="loader-info">
-                    <div className="loader-name">
-                      {opt.label}
-                      {!opt.enabled && <span className="loader-soon-tag">{t('inst.loader.soon')}</span>}
-                    </div>
+                    <div className="loader-name">{opt.label}</div>
                     <div className="loader-desc">{opt.desc}</div>
                   </div>
-                  {opt.enabled && <div className="loader-radio" />}
+                  <div className="loader-radio" />
                 </div>
               ))}
             </div>
             <div className="loader-step-hint">
-              {selectedLoader === 'fabric' ? t('inst.loader.fabric_desc') : t('inst.loader.vanilla_desc')}
+              {selectedLoader === 'vanilla' ? t('inst.loader.vanilla_desc') : t('inst.loader.fabric_desc')}
+            </div>
+          </>
+          ) : (
+          <>
+            <div style={{ padding: '10px 16px 4px', display: 'flex', flexDirection: 'column', gap: 4 }}>
+              <div className="field-label">{t('inst.loader.ver.title')} — {selectedLoader.charAt(0).toUpperCase() + selectedLoader.slice(1)}</div>
+            </div>
+            <div className="vlist">
+              {loaderVerLoading ? (
+                <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.loader.ver.loading')}</div>
+              ) : loaderVersions.length === 0 ? (
+                <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.loader.ver.none')}</div>
+              ) : loaderVersions.map(v => (
+                <motion.button key={v}
+                  className={`vitem${v === selectedLoaderVer ? ' picked' : ''}`}
+                  onClick={() => setSelectedLoaderVer(v)}
+                  whileHover={{ x: 3 }} transition={spring}
+                >
+                  <span className={`vbadge release`} style={{ fontSize: 8 }}>V</span>
+                  <span className="vid">{v}</span>
+                  {v === selectedLoaderVer && <span className="vcheck">✓</span>}
+                </motion.button>
+              ))}
             </div>
           </>
           )
@@ -855,8 +889,8 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
         </div>
 
         <div className="inst-modal-footer">
-          {instType === 'mc' && step === 2 ? (
-            <button className="btn-cancel" onClick={() => setStep(1)}>{t('btn.back')}</button>
+          {instType === 'mc' && step > 1 ? (
+            <button className="btn-cancel" onClick={() => setStep(step === 3 ? 2 : 1)}>{t('btn.back')}</button>
           ) : (
             <button className="btn-cancel" onClick={onClose}>{t('inst.modal.cancel')}</button>
           )}
@@ -864,11 +898,27 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
             <button className="btn-ok" onClick={() => setStep(2)} disabled={!selVer}>
               {t('inst.loader.next')}
             </button>
+          ) : instType === 'mc' && step === 2 ? (
+            <button className="btn-ok" onClick={() => {
+              if (selectedLoader === 'vanilla') { handleCreate(); return }
+              setStep(3)
+              setSelectedLoaderVer('')
+              setLoaderVersions([])
+              if (isTauri) {
+                setLoaderVerLoading(true)
+                invoke<string[]>('get_loader_versions', { mcVer: selVer, loader: selectedLoader })
+                  .then(vs => { setLoaderVersions(vs); if (vs.length > 0) setSelectedLoaderVer(vs[0]) })
+                  .catch(() => {})
+                  .finally(() => setLoaderVerLoading(false))
+              }
+            }}>
+              {selectedLoader === 'vanilla' ? t('inst.modal.create') : t('inst.loader.next')}
+            </button>
           ) : (
             <button
               className={`btn-ok${instType === 'lb' ? ' lb-btn' : ''}`}
               onClick={handleCreate}
-              disabled={!selVer}
+              disabled={!selVer || (instType === 'mc' && step === 3 && !selectedLoaderVer)}
             >
               {t('inst.modal.create')}
             </button>
@@ -1022,19 +1072,36 @@ function ReinstallModal({ inst, isLb, onClose }: { inst: Instance; isLb: boolean
 
 function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: boolean; onClose: () => void }) {
   const t = useT(getLang())
+  const [tab, setTab] = useState<'overview' | 'mods' | 'logs'>('overview')
+
+  // RAM
   const ramKey = `mlbv_inst_ram_${inst.id}`
   const globalRam = Number(localStorage.getItem('mlbv_ram') ?? '2048') || 2048
   const [useCustomRam, setUseCustomRam] = useState(() => !!localStorage.getItem(ramKey))
   const [ram, setRam] = useState(() => Number(localStorage.getItem(ramKey) ?? globalRam))
-  const [logText, setLogText]   = useState('')
-  const [logBusy, setLogBusy]   = useState(false)
+
+  // Logs
+  const [logText, setLogText] = useState('')
+  const [logBusy, setLogBusy] = useState(false)
+
+  // Mods
+  const [mods, setMods] = useState<{ filename: string }[]>([])
+  const [selectedMods, setSelectedMods] = useState<Set<string>>(new Set())
+  const [modsLoading, setModsLoading] = useState(false)
 
   useEffect(() => {
     if (!isTauri) return
-    invoke<string>('read_instance_log', { instanceName: inst.name })
-      .then(s => setLogText(s))
-      .catch(() => {})
+    invoke<string>('read_instance_log', { instanceName: inst.name }).then(s => setLogText(s)).catch(() => {})
   }, [inst.name])
+
+  useEffect(() => {
+    if (tab !== 'mods' || !isTauri) return
+    setModsLoading(true)
+    invoke<{ filename: string }[]>('list_mods', { instanceName: inst.name })
+      .then(m => { setMods(m); setSelectedMods(new Set()) })
+      .catch(() => {})
+      .finally(() => setModsLoading(false))
+  }, [tab, inst.name])
 
   useEffect(() => {
     if (useCustomRam) localStorage.setItem(ramKey, String(ram))
@@ -1042,8 +1109,51 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
   }, [useCustomRam, ram, ramKey])
 
   const clampRam = (v: number) => Math.min(16384, Math.max(512, Math.round(v / 512) * 512))
-  const logLines = logText ? logText.split('\n').slice(-30).join('\n') : ''
   const accentVar = isLb ? 'var(--lb-accent)' : 'var(--accent)'
+
+  const loaderLabel = () => {
+    if (inst.type === 'lb') return t('isettings.type_lb')
+    switch (inst.loader) {
+      case 'fabric': return `Fabric${inst.loaderVersion ? ` ${inst.loaderVersion}` : ''}`
+      case 'quilt':  return `Quilt${inst.loaderVersion ? ` ${inst.loaderVersion}` : ''}`
+      case 'forge':  return `Forge${inst.loaderVersion ? ` ${inst.loaderVersion}` : ''}`
+      case 'neoforge': return `NeoForge${inst.loaderVersion ? ` ${inst.loaderVersion}` : ''}`
+      default: return 'Vanilla'
+    }
+  }
+
+  const handleAddMods = () => {
+    const input = document.createElement('input')
+    input.type = 'file'; input.accept = '.jar'; input.multiple = true
+    input.onchange = async () => {
+      const files = Array.from(input.files ?? [])
+      for (const file of files) {
+        if (!file.name.endsWith('.jar')) continue
+        const buf = await file.arrayBuffer()
+        await invoke('add_mod_file', { instanceName: inst.name, filename: file.name, data: Array.from(new Uint8Array(buf)) }).catch(() => {})
+      }
+      const updated = await invoke<{ filename: string }[]>('list_mods', { instanceName: inst.name }).catch(() => [] as { filename: string }[])
+      setMods(updated)
+    }
+    input.click()
+  }
+
+  const handleDeleteMods = async () => {
+    if (selectedMods.size === 0) return
+    await invoke('delete_mods', { instanceName: inst.name, filenames: Array.from(selectedMods) }).catch(() => {})
+    const updated = await invoke<{ filename: string }[]>('list_mods', { instanceName: inst.name }).catch(() => [] as { filename: string }[])
+    setMods(updated); setSelectedMods(new Set())
+  }
+
+  const toggleMod = (filename: string) => {
+    setSelectedMods(prev => { const n = new Set(prev); if (n.has(filename)) n.delete(filename); else n.add(filename); return n })
+  }
+
+  const navItems = [
+    { id: 'overview', label: t('isettings.nav.overview'), icon: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><rect x="2" y="2" width="5" height="5" rx="1"/><rect x="9" y="2" width="5" height="5" rx="1"/><rect x="2" y="9" width="5" height="5" rx="1"/><rect x="9" y="9" width="5" height="5" rx="1"/></svg> },
+    { id: 'mods',     label: t('isettings.nav.mods'),     icon: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round"><path d="M13 6.5A3.5 3.5 0 0 0 6.5 3c-.18 0-.36.01-.53.04L3 6l1 1-1 1 1 1-1 1 2.5 2.5 1-1 1 1 1-1 1 1 3-3V9.5h1A1.5 1.5 0 0 0 13 8V6.5z"/><circle cx="10" cy="5.5" r="0.7" fill="currentColor" stroke="none"/></svg> },
+    { id: 'logs',     label: t('isettings.nav.logs'),     icon: <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round"><path d="M3 4h10M3 8h10M3 12h6"/></svg> },
+  ]
 
   return (
     <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
@@ -1057,43 +1167,140 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
           <span className="modal-title">{inst.name}</span>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
-        <div className="inst-settings-body">
-          <div className="setting-group">
-            <div className="setting-label">{t('isettings.ram')}</div>
-            <label className="setting-toggle">
-              <input type="checkbox" checked={useCustomRam} onChange={e => setUseCustomRam(e.target.checked)} />
-              <span className="toggle-track ist-toggle-track"><span className="toggle-thumb" /></span>
-              <span className="toggle-label">{useCustomRam ? `${ram >= 1024 ? `${(ram/1024).toFixed(1)} GB` : `${ram} MB`}` : `Global (${globalRam >= 1024 ? `${(globalRam/1024).toFixed(1)} GB` : `${globalRam} MB`})`}</span>
-            </label>
-            {useCustomRam && (
-              <input type="range" className="glass-range" min={512} max={16384} step={512}
-                value={ram} onChange={e => setRam(clampRam(Number(e.target.value)))} />
-            )}
-          </div>
-          <div className="setting-group">
-            <div className="setting-label">{t('isettings.logs')}</div>
-            <div className="inst-log-actions">
-              <button className="btn-secondary" onClick={() => { navigator.clipboard.writeText(logText); setLogBusy(true); setTimeout(() => setLogBusy(false), 1200) }}>
-                {logBusy ? t('isettings.copied') : t('isettings.copy_log')}
+        <div className="inst-settings-layout">
+          {/* Left nav */}
+          <div className="ist-nav">
+            {navItems.map(n => (
+              <button key={n.id}
+                className={`ist-nav-btn${tab === n.id ? ` active${isLb ? ' lb-nav' : ''}` : ''}`}
+                onClick={() => setTab(n.id as typeof tab)}
+              >
+                <div className="ist-nav-icon">{n.icon}</div>
+                <span className="ist-nav-label">{n.label}</span>
               </button>
-              {isTauri && (
-                <button className="btn-secondary" onClick={() =>
-                  invoke('open_instance_logs_folder', { instanceName: inst.name }).catch(() => {})
-                }>{t('isettings.open_logs')}</button>
+            ))}
+          </div>
+          {/* Right panel */}
+          <div className="ist-panel">
+            {tab === 'overview' && <>
+              <div className="setting-group">
+                <div className="setting-label">{t('isettings.info')}</div>
+                <div className="setting-hint">
+                  Version: {inst.version} · MC {inst.mcVersion}<br/>
+                  Loader: {loaderLabel()}
+                </div>
+              </div>
+              <div className="setting-group">
+                <div className="setting-label">{t('isettings.ram')}</div>
+                <label className="setting-toggle">
+                  <input type="checkbox" checked={useCustomRam} onChange={e => setUseCustomRam(e.target.checked)} />
+                  <span className="toggle-track ist-toggle-track"><span className="toggle-thumb" /></span>
+                  <span className="toggle-label">{useCustomRam ? `${ram >= 1024 ? `${(ram/1024).toFixed(1)} GB` : `${ram} MB`}` : `Global (${globalRam >= 1024 ? `${(globalRam/1024).toFixed(1)} GB` : `${globalRam} MB`})`}</span>
+                </label>
+                {useCustomRam && (
+                  <input type="range" className="glass-range" min={512} max={16384} step={512}
+                    value={ram} onChange={e => setRam(clampRam(Number(e.target.value)))} />
+                )}
+              </div>
+            </>}
+
+            {tab === 'mods' && <>
+              <div className="ist-mods-toolbar">
+                <button className="btn-secondary" onClick={() => {}} style={{ opacity: 0.5, cursor: 'not-allowed' }}>{t('isettings.mods.download')}</button>
+                <button className="btn-secondary" onClick={handleAddMods}>{t('isettings.mods.add_file')}</button>
+                <button className="btn-secondary" onClick={() => isTauri && invoke('open_mods_folder', { instanceName: inst.name }).catch(() => {})}>{t('isettings.mods.open_folder')}</button>
+                {selectedMods.size > 0 && (
+                  <button className="btn-danger-sm" onClick={handleDeleteMods}>{t('isettings.mods.delete_selected')} ({selectedMods.size})</button>
+                )}
+              </div>
+              {modsLoading ? (
+                <div className="ist-mods-empty">{t('loading')}</div>
+              ) : mods.length === 0 ? (
+                <div className="ist-mods-empty">{t('isettings.mods.empty')}</div>
+              ) : (
+                <div className="ist-mods-list">
+                  {mods.map(m => (
+                    <div key={m.filename}
+                      className={`ist-mod-row${selectedMods.has(m.filename) ? (isLb ? ' lb-mod-selected' : ' mod-selected') : ''}`}
+                      onClick={() => toggleMod(m.filename)}
+                    >
+                      <div className="mod-radio" />
+                      <span className="mod-name">{m.filename}</span>
+                    </div>
+                  ))}
+                </div>
               )}
-            </div>
-            {logLines
-              ? <pre className="inst-log-preview">{logLines}</pre>
-              : <div className="setting-hint">{t('isettings.no_log')}</div>
-            }
+            </>}
+
+            {tab === 'logs' && <>
+              <div className="inst-log-actions">
+                <button className="btn-secondary" onClick={() => { navigator.clipboard.writeText(logText); setLogBusy(true); setTimeout(() => setLogBusy(false), 1200) }}>
+                  {logBusy ? t('isettings.copied') : t('isettings.copy_log')}
+                </button>
+                {isTauri && (
+                  <button className="btn-secondary" onClick={() => invoke('open_instance_logs_folder', { instanceName: inst.name }).catch(() => {})}>
+                    {t('isettings.open_logs')}
+                  </button>
+                )}
+              </div>
+              {logText
+                ? <pre className="inst-log-preview">{logText}</pre>
+                : <div className="setting-hint">{t('isettings.no_log')}</div>
+              }
+            </>}
           </div>
-          <div className="setting-group">
-            <div className="setting-label">{t('isettings.info')}</div>
-            <div className="setting-hint">
-              Version: {inst.version} · MC {inst.mcVersion}<br/>
-              Type: {inst.type === 'lb' ? t('isettings.type_lb') : t('isettings.type_mc')}
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
+
+// ─── Delete Instance Modal ────────────────────────────────────────────────────
+
+function DeleteInstanceModal({ inst, onRemoveList, onDeleteDisk, onClose }: {
+  inst: Instance
+  onRemoveList: () => void
+  onDeleteDisk: () => void
+  onClose: () => void
+}) {
+  const t = useT(getLang())
+  const [mode, setMode] = useState<'list' | 'disk'>('list')
+
+  return (
+    <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} onClick={onClose}>
+      <motion.div className="modal glass delete-inst-modal"
+        initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.9, y: 16 }} transition={spring}
+        onClick={e => e.stopPropagation()}
+      >
+        <div className="modal-head">
+          <span className="modal-title">{t('delete_inst.title')} — {inst.name}</span>
+          <button className="modal-close" onClick={onClose}>×</button>
+        </div>
+        <div className="delete-inst-body">
+          <label className={`reinstall-opt${mode === 'list' ? ' active' : ''}`} onClick={() => setMode('list')}>
+            <span className="reinstall-radio" />
+            <div>
+              <div className="reinstall-opt-title">{t('delete_inst.from_list')}</div>
+              <div className="reinstall-opt-sub">{t('delete_inst.from_list_desc')}</div>
             </div>
-          </div>
+          </label>
+          <label className={`reinstall-opt${mode === 'disk' ? ' active danger-opt' : ''}`} onClick={() => setMode('disk')}>
+            <span className="reinstall-radio" />
+            <div>
+              <div className="reinstall-opt-title">{t('delete_inst.from_disk')}</div>
+              <div className="reinstall-opt-sub">{t('delete_inst.from_disk_desc')}</div>
+            </div>
+          </label>
+        </div>
+        <div className="inst-modal-footer">
+          <button className="btn-cancel" onClick={onClose}>{t('settings.cancel')}</button>
+          <button
+            className={`btn-ok${mode === 'disk' ? ' btn-delete-confirm enabled' : ''}`}
+            onClick={() => { mode === 'disk' ? onDeleteDisk() : onRemoveList(); onClose() }}
+          >
+            {t('delete_inst.confirm')}
+          </button>
         </div>
       </motion.div>
     </motion.div>
@@ -1346,6 +1553,7 @@ export default function App() {
   // Instance modals
   const [instSettingsOf, setInstSettingsOf]   = useState<Instance | null>(null)
   const [reinstallOf, setReinstallOf]         = useState<Instance | null>(null)
+  const [deleteOf, setDeleteOf]               = useState<Instance | null>(null)
 
   // ── Computed ─────────────────────────────────────────────────────────────
   const fmtSpeed = (bps: number) => {
@@ -1436,10 +1644,15 @@ export default function App() {
   }
 
   const handleCtxAction = (action: CtxAction, inst: Instance) => {
-    if (action === 'delete')    { removeInstance(inst.id) }
+    if (action === 'delete')    { setDeleteOf(inst) }
     if (action === 'rename')    { setRenamingId(inst.id); setRenameText(inst.name) }
     if (action === 'settings')  { setInstSettingsOf(inst) }
     if (action === 'reinstall') { setReinstallOf(inst) }
+  }
+
+  const handleDeleteDisk = (inst: Instance) => {
+    removeInstance(inst.id)
+    if (isTauri) invoke('delete_instance_data', { instanceName: inst.name }).catch(() => {})
   }
 
   const handleCtxMenu = (e: React.MouseEvent, inst: Instance) => {
@@ -1541,6 +1754,13 @@ export default function App() {
         } else if (activeInstance.loader === 'fabric') {
           await invoke('launch_fabric_game', {
             versionId: activeInstance.mcVersion,
+            loaderVersion: activeInstance.loaderVersion ?? '',
+            ...baseArgs,
+          })
+        } else if (activeInstance.loader === 'quilt') {
+          await invoke('launch_quilt_game', {
+            versionId: activeInstance.mcVersion,
+            loaderVersion: activeInstance.loaderVersion ?? '',
             ...baseArgs,
           })
         } else {
@@ -2172,6 +2392,18 @@ export default function App() {
               inst={reinstallOf}
               isLb={reinstallOf.type === 'lb'}
               onClose={() => setReinstallOf(null)}
+            />
+          )}
+        </AnimatePresence>
+
+        {/* ── DELETE INSTANCE ── */}
+        <AnimatePresence>
+          {deleteOf && (
+            <DeleteInstanceModal
+              inst={deleteOf}
+              onRemoveList={() => removeInstance(deleteOf.id)}
+              onDeleteDisk={() => handleDeleteDisk(deleteOf)}
+              onClose={() => setDeleteOf(null)}
             />
           )}
         </AnimatePresence>

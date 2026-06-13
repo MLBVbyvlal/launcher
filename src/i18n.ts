@@ -281,6 +281,31 @@ const S: Record<Lang, Record<string, string>> = {
     'console.empty': 'Waiting for game output…',
     'console.lines': 'lines',
     'console.clear': 'Clear',
+
+    // Loader version picker (step 3)
+    'inst.loader.ver.title': 'Loader Version',
+    'inst.loader.ver.loading': 'Fetching versions…',
+    'inst.loader.ver.none': 'No versions available for this Minecraft version.',
+
+    // Instance settings nav
+    'isettings.nav.overview': 'Overview',
+    'isettings.nav.mods': 'Mods',
+    'isettings.nav.logs': 'Logs',
+
+    // Mods panel
+    'isettings.mods.download': 'Download Mods',
+    'isettings.mods.add_file': 'Add from file',
+    'isettings.mods.open_folder': 'Open Folder',
+    'isettings.mods.delete_selected': 'Delete selected',
+    'isettings.mods.empty': 'No mods installed',
+
+    // Delete instance dialog
+    'delete_inst.title': 'Delete Instance',
+    'delete_inst.from_list': 'Remove from list',
+    'delete_inst.from_list_desc': 'Removes from the launcher list only. Game files stay on disk.',
+    'delete_inst.from_disk': 'Delete from disk',
+    'delete_inst.from_disk_desc': 'Permanently deletes all game files. This cannot be undone.',
+    'delete_inst.confirm': 'Confirm',
   },
 
   ru: {
@@ -355,8 +380,8 @@ const S: Record<Lang, Record<string, string>> = {
     'feat.offline': 'Оффлайн режим',
     'feat.offline_s': 'Играй без аккаунта Microsoft',
     'feat.offline_d': 'Нет лицензии? Нет аккаунта Microsoft? Не проблема. Создай гостевой профиль и играй на любом оффлайн-сервере или в локальном мире прямо сейчас — без авторизации.',
-    'feat.instances': 'Менеджер инстансов',
-    'feat.instances_d': 'Создавай неограниченное количество инстансов, каждый со своими модами, мирами, ресурспаками и настройками. Запускай Minecraft 1.7.10 и 1.21 бок о бок без конфликтов.',
+    'feat.instances': 'Менеджер версий',
+    'feat.instances_d': 'Создавай неограниченное количество версий, каждая со своими модами, мирами, ресурспаками и настройками. Запускай Minecraft 1.7.10 и 1.21 бок о бок без конфликтов.',
     'feat.custom': 'Полный контроль',
     'feat.custom_s': 'RAM, разрешение, загрузки — всё твоё',
     'feat.custom_d': 'Настрой объём RAM, управляй потоками загрузки, задай кастомные флаги Java, выбери разрешение — каждая настройка доступна и легко меняется. Твой лаунчер, твои правила.',
@@ -373,11 +398,11 @@ const S: Record<Lang, Record<string, string>> = {
     'play.lb': 'Запустить LiquidBounce',
     'stop': 'Остановить',
     'no_account': 'Выберите аккаунт',
-    'no_instance': 'Создайте инстанс',
+    'no_instance': 'Создайте версию',
     'add_account': '+ Добавить аккаунт',
-    'new_instance': '+ Новый инстанс',
+    'new_instance': '+ Добавить',
     'sidebar.account': 'Аккаунт',
-    'sidebar.instances': 'Инстансы',
+    'sidebar.instances': 'Версии',
     'settings.language': 'Язык',
     'sidebar.expand': 'Развернуть',
     'sidebar.collapse': 'Свернуть',
@@ -444,14 +469,14 @@ const S: Record<Lang, Record<string, string>> = {
     'status.playing_ver': 'MC',
 
     // Instance modal
-    'inst.modal.title_mc': 'Новый инстанс Minecraft',
-    'inst.modal.title_lb': 'Новый инстанс LiquidBounce',
-    'inst.modal.name': 'Название инстанса',
-    'inst.modal.name_ph': 'Мой инстанс',
+    'inst.modal.title_mc': 'Добавить версию Minecraft',
+    'inst.modal.title_lb': 'Добавить LiquidBounce',
+    'inst.modal.name': 'Название',
+    'inst.modal.name_ph': 'Моя версия',
     'inst.modal.version': 'Версия',
     'inst.modal.branch': 'Ветка',
     'inst.modal.cancel': 'Отмена',
-    'inst.modal.create': 'Создать',
+    'inst.modal.create': 'Добавить',
     'inst.modal.filter.release': 'Релизы',
     'inst.modal.filter.snapshot': 'Снапшоты',
     'inst.modal.filter.old': 'Старые',
@@ -538,7 +563,7 @@ const S: Record<Lang, Record<string, string>> = {
     // Instance errors
     'error.prefix': 'Ошибка:',
     'inst.no_versions': 'Версий нет.',
-    'inst.name_taken': 'Инстанс с таким именем уже существует.',
+    'inst.name_taken': 'Версия с таким именем уже существует.',
     'isettings.copy_log': 'Скопировать latest.log',
     'isettings.copied': 'Скопировано!',
     'reinstall.choose': 'Выберите, что сохранить при переустановке инстанса.',
@@ -563,6 +588,31 @@ const S: Record<Lang, Record<string, string>> = {
     'console.empty': 'Ожидание вывода игры…',
     'console.lines': 'строк',
     'console.clear': 'Очистить',
+
+    // Loader version picker (step 3)
+    'inst.loader.ver.title': 'Версия загрузчика',
+    'inst.loader.ver.loading': 'Загрузка версий…',
+    'inst.loader.ver.none': 'Нет версий для этой версии Minecraft.',
+
+    // Instance settings nav
+    'isettings.nav.overview': 'Общее',
+    'isettings.nav.mods': 'Моды',
+    'isettings.nav.logs': 'Логи',
+
+    // Mods panel
+    'isettings.mods.download': 'Скачать моды',
+    'isettings.mods.add_file': 'Добавить файл',
+    'isettings.mods.open_folder': 'Открыть папку',
+    'isettings.mods.delete_selected': 'Удалить выбранные',
+    'isettings.mods.empty': 'Модов нет',
+
+    // Delete instance dialog
+    'delete_inst.title': 'Удалить версию',
+    'delete_inst.from_list': 'Убрать из списка',
+    'delete_inst.from_list_desc': 'Убирает из списка лаунчера. Файлы игры остаются на диске.',
+    'delete_inst.from_disk': 'Удалить с диска',
+    'delete_inst.from_disk_desc': 'Безвозвратно удаляет все файлы игры. Нельзя отменить.',
+    'delete_inst.confirm': 'Подтвердить',
   },
 }
 
