@@ -365,7 +365,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                         </span>
                       )}
                     </div>
-                    <div className="about-by">by vlal.</div>
+                    <div className="about-by">by vlalikoffc.</div>
                   </div>
                 )}
 
