@@ -344,7 +344,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                       This launcher is not affiliated with, sponsored by, or endorsed by the LiquidBounce team or CCBlueX.
                     </p>
                     <div className="about-info">
-                      <span className="about-ver">MLBV v0.1.0</span>
+                      <span className="about-ver">MLBV v0.0.1</span>
                       <span className="about-stack">Tauri v2 · Rust · React · TypeScript</span>
                     </div>
                     <div className="about-update-row">
