@@ -252,6 +252,27 @@ fn scan_java() -> Vec<serde_json::Value> {
 }
 
 #[tauri::command]
+fn get_debug_info() -> serde_json::Value {
+    let shared = launcher::shared_data_dir();
+    let mc     = launcher::mc_dir();
+    let java_dir = shared.join("java");
+    let java_entries: Vec<String> = std::fs::read_dir(&java_dir)
+        .map(|rd| rd.flatten().map(|e| e.file_name().to_string_lossy().into_owned()).collect())
+        .unwrap_or_default();
+    let installs = launcher::scan_java_installs();
+    serde_json::json!({
+        "version":    env!("CARGO_PKG_VERSION"),
+        "os":         std::env::consts::OS,
+        "arch":       std::env::consts::ARCH,
+        "shared_dir": shared.to_string_lossy(),
+        "mc_dir":     mc.to_string_lossy(),
+        "java_dir_exists": java_dir.exists(),
+        "java_subdirs": java_entries,
+        "java_installs": installs.iter().map(|(m, p)| format!("Java {m}: {p}")).collect::<Vec<_>>(),
+    })
+}
+
+#[tauri::command]
 fn check_version_installed(version_id: String) -> bool {
     let dir = launcher::mc_dir();
     let jar = dir
@@ -280,7 +301,7 @@ async fn launch_game(
 ) -> Result<(), String> {
     launcher::run(app, version_id, instance_name, username, uuid, offline, access_token, concurrent_downloads, max_ram_mb)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("{:#}", e))
 }
 
 #[tauri::command]
@@ -298,7 +319,7 @@ async fn launch_lb_game(
 ) -> Result<(), String> {
     launcher::run_lb(app, build_id, mc_version, instance_name, username, uuid, offline, access_token, concurrent_downloads, max_ram_mb)
         .await
-        .map_err(|e| e.to_string())
+        .map_err(|e| format!("{:#}", e))
 }
 
 #[tauri::command]
@@ -378,6 +399,7 @@ struct ReleaseInfo {
     tag_name: String,
     body:     String,
     html_url: String,
+    asset_url: String,   // direct .exe download URL; empty if no asset found
 }
 
 fn parse_semver(v: &str) -> (u64, u64, u64) {
@@ -406,12 +428,96 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
     if parse_semver(ver) <= parse_semver(current) {
         return Ok(None);
     }
+    let asset_url = release["assets"]
+        .as_array()
+        .and_then(|a| a.iter().find(|asset| {
+            asset["name"].as_str().map(|n| n.ends_with(".exe")).unwrap_or(false)
+        }))
+        .and_then(|a| a["browser_download_url"].as_str())
+        .unwrap_or("")
+        .to_string();
+
     Ok(Some(ReleaseInfo {
         version:  ver.to_string(),
         tag_name: tag,
         body:     release["body"].as_str().unwrap_or("").to_string(),
         html_url: release["html_url"].as_str().unwrap_or("").to_string(),
+        asset_url,
     }))
+}
+
+// Download the update installer to %TEMP% and emit progress events
+#[tauri::command]
+async fn download_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("MLBV/1.0")
+        .build().map_err(|e| e.to_string())?;
+
+    let resp = client.get(&url).send().await
+        .map_err(|e| format!("Download failed: {e}"))?;
+    if !resp.status().is_success() {
+        return Err(format!("HTTP {}", resp.status()));
+    }
+
+    let total = resp.content_length().unwrap_or(0);
+    let tmp_path = std::env::temp_dir().join("mlbv-update.exe");
+    let mut file = std::fs::File::create(&tmp_path)
+        .map_err(|e| format!("Cannot create temp file: {e}"))?;
+    let mut downloaded: u64 = 0;
+    let mut resp = resp;
+
+    while let Some(chunk) = resp.chunk().await
+        .map_err(|e| format!("Download interrupted: {e}"))?
+    {
+        use std::io::Write;
+        file.write_all(&chunk).map_err(|e| format!("Write failed: {e}"))?;
+        downloaded += chunk.len() as u64;
+        if total > 0 {
+            let pct = downloaded as f32 / total as f32 * 100.0;
+            let _ = app.emit("update-progress", serde_json::json!({ "percent": pct }));
+        }
+    }
+    Ok(())
+}
+
+// Run the downloaded installer with the real install path, then exit
+#[tauri::command]
+fn apply_update(app: tauri::AppHandle, new_version: String) -> Result<(), String> {
+    let tmp_path = std::env::temp_dir().join("mlbv-update.exe");
+    if !tmp_path.exists() {
+        return Err("Update installer not found".to_string());
+    }
+
+    let install_dir = std::env::current_exe()
+        .map_err(|e| e.to_string())?
+        .parent()
+        .ok_or_else(|| "Cannot determine install directory".to_string())?
+        .to_path_buf();
+
+    // Write the new version so the next launch can show "Updated to vX" toast
+    let marker = std::env::temp_dir().join("mlbv-just-updated.txt");
+    let _ = std::fs::write(&marker, &new_version);
+
+    // NSIS silent install: /S = silent, /D= = destination (must be last, no quotes)
+    std::process::Command::new(&tmp_path)
+        .arg("/S")
+        .arg(format!("/D={}", install_dir.to_string_lossy()))
+        .spawn()
+        .map_err(|e| format!("Failed to start installer: {e}"))?;
+
+    std::thread::sleep(std::time::Duration::from_millis(400));
+    app.exit(0);
+    Ok(())
+}
+
+// Check if we just updated — returns old version string, or empty if not
+#[tauri::command]
+fn get_just_updated() -> String {
+    let marker = std::env::temp_dir().join("mlbv-just-updated.txt");
+    if !marker.exists() { return String::new(); }
+    let ver = std::fs::read_to_string(&marker).unwrap_or_default();
+    let _ = std::fs::remove_file(&marker);
+    ver.trim().to_string()
 }
 
 #[tauri::command]
@@ -467,7 +573,11 @@ pub fn run() {
             open_instance_logs_folder,
             reinstall_instance,
             check_for_update,
+            download_update,
+            apply_update,
+            get_just_updated,
             open_url,
+            get_debug_info,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

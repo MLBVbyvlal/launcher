@@ -48,7 +48,7 @@ MLBV manages everything the official Minecraft launcher does, but with a cleaner
 ### Java
 
 - Detects Java installations already on your machine.
-- Downloads the right version automatically from adoptium.net if it's missing — Java 8 for 1.16.5 and below, Java 17 for 1.17–1.20.4, Java 21 for 1.20.5+.
+- Downloads the right version automatically from adoptium.net if it's missing — Java 8 for 1.16.5 and below, Java 17 for 1.17–1.20.4, Java 21 for 1.20.5+, Java 25 for future versions.
 - Never touches or modifies an existing Java install.
 
 ### Downloads

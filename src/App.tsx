@@ -18,7 +18,7 @@ type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string;
 type VFilter    = 'release' | 'snapshot' | 'old' | 'all'
 type AppState   = 'loading' | 'ready' | 'error'
 type Tab        = 'mc' | 'lb'
-type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string }
+type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string; assetUrl: string }
 
 const spring = { type: 'spring', stiffness: 400, damping: 30 } as const
 
@@ -30,6 +30,67 @@ function LbBadge({ size = 20 }: { size?: number }) {
 }
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const tick = (ms: number) => new Promise<void>(r => setTimeout(r, ms))
+
+// ─── Tooltip ─────────────────────────────────────────────────────────────────
+
+function Tip({ text }: { text: string }) {
+  return (
+    <span className="tip-wrap">
+      <svg className="tip-icon" viewBox="0 0 16 16" fill="none">
+        <circle cx="8" cy="8" r="6.5" stroke="currentColor" strokeWidth="1.1"/>
+        <path d="M8 7.5v3" stroke="currentColor" strokeWidth="1.3" strokeLinecap="round"/>
+        <circle cx="8" cy="5.5" r="0.6" fill="currentColor"/>
+      </svg>
+      <span className="tip-text">{text}</span>
+    </span>
+  )
+}
+
+// ─── Accent helpers ───────────────────────────────────────────────────────────
+
+const DEFAULT_ACCENT = '#4ade80'
+
+function hexToRgb(hex: string): [number, number, number] | null {
+  const m = /^#([0-9a-f]{6})$/i.exec(hex.trim())
+  if (!m) return null
+  return [parseInt(m[1].slice(0,2),16), parseInt(m[1].slice(2,4),16), parseInt(m[1].slice(4,6),16)]
+}
+
+function applyAccent(hex: string, applyToLb = false) {
+  const rgb = hexToRgb(hex)
+  if (!rgb) return
+  const [r,g,b] = rgb
+  const d = (c: number) => Math.round(c * 0.75).toString(16).padStart(2,'0')
+  const dark = `#${d(r)}${d(g)}${d(b)}`
+  const glow = `rgba(${r},${g},${b},0.38)`
+  const lum = (0.299*r + 0.587*g + 0.114*b) / 255
+  const onAccent = lum > 0.45 ? '#061206' : '#ffffff'
+  const root = document.documentElement.style
+  root.setProperty('--accent', hex)
+  root.setProperty('--accent-dark', dark)
+  root.setProperty('--accent-glow', glow)
+  root.setProperty('--on-accent', onAccent)
+  if (applyToLb) {
+    root.setProperty('--lb-accent', hex)
+    root.setProperty('--lb-accent-dark', dark)
+    root.setProperty('--lb-glow', glow)
+  } else {
+    root.setProperty('--lb-accent', '#4c8bf5')
+    root.setProperty('--lb-accent-dark', '#2563eb')
+    root.setProperty('--lb-glow', 'rgba(76,139,245,0.38)')
+  }
+}
+
+const ACCENT_PRESETS = [
+  { name: 'Grass',  hex: '#4ade80' },
+  { name: 'Lime',   hex: '#a3e635' },
+  { name: 'Sky',    hex: '#38bdf8' },
+  { name: 'Indigo', hex: '#818cf8' },
+  { name: 'Violet', hex: '#c084fc' },
+  { name: 'Coral',  hex: '#fb923c' },
+  { name: 'Rose',   hex: '#fb7185' },
+  { name: 'Gold',   hex: '#fbbf24' },
+]
 
 function verTag(type?: MCVersion['type']): string {
   switch (type) {
@@ -45,6 +106,7 @@ function verTag(type?: MCVersion['type']): string {
 function LoadingScreen({ status, progress, onRetry }: {
   status: string; progress: number; onRetry?: () => void
 }) {
+  const t = useT(getLang())
   return (
     <motion.div className="splash"
       initial={{ opacity: 1 }} exit={{ opacity: 0, scale: 1.04 }}
@@ -60,13 +122,13 @@ function LoadingScreen({ status, progress, onRetry }: {
         >
           <div className="splash-logo-mark"><span /><span /><span /><span /></div>
           <div className="splash-title">MLBV</div>
-          <div className="splash-subtitle">Minecraft Launcher by vlal</div>
+          <div className="splash-subtitle">{t('launcher.subtitle')}</div>
         </motion.div>
         <motion.div className="splash-loader" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.4 }}>
           {onRetry ? (
             <div className="splash-error">
               <div className="splash-status error">{status}</div>
-              <button className="btn-retry" onClick={onRetry}>Try again</button>
+              <button className="btn-retry" onClick={onRetry}>{t('error.retry')}</button>
             </div>
           ) : (
             <>
@@ -92,9 +154,16 @@ const RAM_MARKS = [
   { v: 16384, label: '16 GB',  pct: 100  },
 ]
 
-type SettingsTab = 'general' | 'performance' | 'java' | 'about' | 'danger'
+type SettingsTab = 'general' | 'performance' | 'java' | 'about' | 'customize' | 'danger'
 
-function SettingsModal({ onClose }: { onClose: () => void }) {
+function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangChange?: (l: Lang) => void }) {
+  const [localLang, setLocalLang] = useState<Lang>(getLang)
+  const t = useT(localLang)
+  const handleLangChange = (l: Lang) => {
+    localStorage.setItem('mlbv_lang', l)
+    setLocalLang(l)
+    onLangChange?.(l)
+  }
   const [tab, setTab]     = useState<SettingsTab>('general')
   const [gameDir, setGameDir] = useState('Loading…')
   const [ram, setRam]     = useState(() => { const s = localStorage.getItem('mlbv_ram'); return s ? Number(s) : 2048 })
@@ -107,6 +176,33 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const [countdown, setCountdown]           = useState(5)
   const [deleting, setDeleting]             = useState(false)
   const [updateStatus, setUpdateStatus]     = useState<'idle' | 'checking' | 'uptodate' | { version: string; htmlUrl: string }>('idle')
+
+  // Customization
+  const [customAccent, setCustomAccent] = useState(() => localStorage.getItem('mlbv_accent') ?? DEFAULT_ACCENT)
+  const [hexInput, setHexInput]         = useState(() => localStorage.getItem('mlbv_accent') ?? DEFAULT_ACCENT)
+  const [applyToLb, setApplyToLb]       = useState(() => localStorage.getItem('mlbv_lb_accent_same') === '1')
+
+  const handleSetAccent = (hex: string) => {
+    const cleaned = hex.startsWith('#') ? hex : `#${hex}`
+    if (!/^#[0-9a-f]{6}$/i.test(cleaned)) return
+    setCustomAccent(cleaned)
+    setHexInput(cleaned)
+    localStorage.setItem('mlbv_accent', cleaned)
+    applyAccent(cleaned, applyToLb)
+  }
+  const handleResetAccent = () => {
+    setCustomAccent(DEFAULT_ACCENT)
+    setHexInput(DEFAULT_ACCENT)
+    localStorage.removeItem('mlbv_accent')
+    localStorage.removeItem('mlbv_lb_accent_same')
+    setApplyToLb(false)
+    applyAccent(DEFAULT_ACCENT, false)
+  }
+  const handleApplyToLbChange = (v: boolean) => {
+    setApplyToLb(v)
+    localStorage.setItem('mlbv_lb_accent_same', v ? '1' : '0')
+    applyAccent(customAccent, v)
+  }
 
   useEffect(() => {
     if (isTauri) {
@@ -133,9 +229,9 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
   const commitConcurrent = (raw: string) => { const n = Number(raw); if (!isNaN(n) && n > 0) setConcurrent(clampConcurrent(n)); setConcurrentDraft(null) }
 
   const concurrentWarning = concurrent < 5
-    ? 'Not recommended — use only on slow or unstable connections.'
+    ? t('perf.warn.low')
     : concurrent >= 10
-    ? 'Speed may decrease — Mojang CDN limits concurrent connections.'
+    ? t('perf.warn.high')
     : null
 
   const handleDelete = async () => {
@@ -149,7 +245,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
     if (!isTauri) return
     setUpdateStatus('checking')
     try {
-      type RawRelease = { version: string; tag_name: string; body: string; html_url: string }
+      type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string }
       const r = await invoke<RawRelease | null>('check_for_update')
       setUpdateStatus(r ? { version: r.version, htmlUrl: r.html_url } : 'uptodate')
     } catch {
@@ -166,35 +262,35 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 
   type NavItem = { id: SettingsTab; label: string; danger?: boolean; icon: React.ReactNode }
   const NAV: NavItem[] = [
-    { id: 'general', label: 'General', icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="3"/>
-        <path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/>
+    { id: 'general', label: t('settings.tab.general'), icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
       </svg>
     )},
-    { id: 'performance', label: 'Perf', icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+    { id: 'performance', label: t('settings.tab.performance'), icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
         <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z"/>
       </svg>
     )},
     { id: 'java', label: 'Java', icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <path d="M8 15c0 2.21 1.79 4 4 4s4-1.79 4-4c0-3-4-8-4-8S8 12 8 15z"/>
-        <path d="M6 19h12"/>
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <path d="M8 17c0 1.1.9 2 2 2h4c1.1 0 2-.9 2-2v-1H8v1z"/><path d="M7 6s1-2.5 5-3 5 3 5 3-1 2-5 2-5-2-5-2z"/><path d="M12 14V8"/>
       </svg>
     )},
-    { id: 'about', label: 'About', icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <circle cx="12" cy="12" r="10"/>
-        <path d="M12 16v-4M12 8h.01"/>
+    { id: 'about', label: t('settings.tab.about'), icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="12" cy="12" r="10"/><path d="M12 16v-4M12 8h.01"/>
       </svg>
     )},
-    { id: 'danger', label: 'Danger', danger: true, icon: (
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-        <polyline points="3 6 5 6 21 6"/>
-        <path d="M19 6l-1 14H6L5 6"/>
-        <path d="M10 11v6M14 11v6"/>
-        <path d="M9 6V4h6v2"/>
+    { id: 'customize', label: t('settings.tab.customize'), icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <circle cx="13.5" cy="6.5" r="1" fill="currentColor" stroke="none"/><circle cx="17.5" cy="10.5" r="1" fill="currentColor" stroke="none"/><circle cx="8.5" cy="7.5" r="1" fill="currentColor" stroke="none"/><circle cx="6.5" cy="12.5" r="1" fill="currentColor" stroke="none"/>
+        <path d="M12 2C6.5 2 2 6.5 2 12c0 5.52 4.5 10 10 10 .83 0 1.5-.67 1.5-1.5 0-.39-.15-.74-.39-1-.23-.27-.38-.62-.38-1 0-.83.67-1.5 1.5-1.5H16c2.76 0 5-2.24 5-5 0-4.42-4.03-8-9-8z"/>
+      </svg>
+    )},
+    { id: 'danger', label: t('settings.tab.danger'), danger: true, icon: (
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+        <polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14H6L5 6"/><path d="M10 11v6M14 11v6"/><path d="M9 6V4h6v2"/>
       </svg>
     )},
   ]
@@ -207,7 +303,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
         onClick={e => e.stopPropagation()}
       >
         <div className="modal-head">
-          <span className="modal-title">Settings</span>
+          <span className="modal-title">{t('settings.title')}</span>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
 
@@ -236,35 +332,54 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 
                 {/* ── GENERAL ── */}
                 {tab === 'general' && <>
-                  <div className="setting-section-title">General</div>
+                  <div className="setting-section-title">{t('settings.tab.general')}</div>
                   <div className="setting-group">
-                    <div className="setting-label">Data Directory</div>
+                    <div className="setting-label">{t('settings.game_dir')}</div>
                     <div className="setting-path">{gameDir}</div>
-                    <div className="setting-hint">Shared libs, assets and Java runtimes are stored here. Instance saves are under instances/.</div>
+                    <div className="setting-hint">{t('settings.game_dir_hint')}</div>
                   </div>
                   <div className="setting-group">
-                    <label className="setting-toggle">
-                      <input type="checkbox" checked={closeOnLaunch} onChange={e => setCloseOnLaunch(e.target.checked)} />
-                      <span className="toggle-track"><span className="toggle-thumb" /></span>
-                      <span className="toggle-label">Hide launcher when game starts</span>
-                    </label>
+                    <div className="setting-label-row">
+                      <label className="setting-toggle" style={{ flex: 1 }}>
+                        <input type="checkbox" checked={closeOnLaunch} onChange={e => setCloseOnLaunch(e.target.checked)} />
+                        <span className="toggle-track"><span className="toggle-thumb" /></span>
+                        <span className="toggle-label">{t('settings.close_on_launch')}</span>
+                      </label>
+                      <Tip text={t('settings.tip.close_on_launch')} />
+                    </div>
                   </div>
                   <div className="setting-group">
-                    <div className="setting-label">Setup Wizard</div>
+                    <div className="setting-label">{t('settings.reset_setup')}</div>
                     <button className="btn-secondary" onClick={() => {
                       localStorage.removeItem('mlbv_setup_done')
                       onClose()
                       window.location.reload()
-                    }}>Reset Setup Wizard</button>
-                    <div className="setting-hint">The wizard will appear again on next launch.</div>
+                    }}>{t('settings.reset_setup')}</button>
+                    <div className="setting-hint">{t('settings.reset_setup_hint')}</div>
+                  </div>
+                  <div className="setting-group">
+                    <div className="setting-label">{t('settings.language')}</div>
+                    <div className="sw-lang-row" style={{ marginTop: 6, justifyContent: 'flex-start' }}>
+                      <button className={`sw-lang-btn${localLang === 'en' ? ' sw-lang-active' : ''}`} onClick={() => handleLangChange('en')}>
+                        <span className="sw-lang-badge">🇬🇧</span>
+                        <span>English</span>
+                      </button>
+                      <button className={`sw-lang-btn${localLang === 'ru' ? ' sw-lang-active' : ''}`} onClick={() => handleLangChange('ru')}>
+                        <span className="sw-lang-badge">🇷🇺</span>
+                        <span>Русский</span>
+                      </button>
+                    </div>
                   </div>
                 </>}
 
                 {/* ── PERFORMANCE ── */}
                 {tab === 'performance' && <>
-                  <div className="setting-section-title">Performance</div>
+                  <div className="setting-section-title">{t('settings.tab.performance')}</div>
                   <div className="setting-group">
-                    <div className="setting-label">RAM — {ram >= 1024 ? `${(ram/1024).toFixed(1)} GB` : `${ram} MB`}</div>
+                    <div className="setting-label-row">
+                      <div className="setting-label">{t('settings.ram')} — {ram >= 1024 ? `${(ram/1024).toFixed(1)} GB` : `${ram} MB`}</div>
+                      <Tip text={t('settings.tip.ram')} />
+                    </div>
                     <div className="ram-row">
                       <div className="ram-slider-wrap">
                         <input type="range" className="glass-range" min={512} max={16384} step={512}
@@ -284,7 +399,10 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                     </div>
                   </div>
                   <div className="setting-group">
-                    <div className="setting-label">Parallel Downloads — {concurrent}</div>
+                    <div className="setting-label-row">
+                      <div className="setting-label">{t('settings.concurrent')} — {concurrent}</div>
+                      <Tip text={t('settings.tip.concurrent')} />
+                    </div>
                     <div className="concurrent-row">
                       <input type="range" className="glass-range" min={1} max={50} step={1}
                         value={concurrent} onChange={e => { setConcurrent(Number(e.target.value)); setConcurrentDraft(null) }} />
@@ -305,14 +423,14 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
 
                 {/* ── JAVA ── */}
                 {tab === 'java' && <>
-                  <div className="setting-section-title">Java Runtimes</div>
+                  <div className="setting-section-title">{t('settings.java')}</div>
                   <div className="setting-group">
                     <div className="java-grid">
                       {JAVA_REQS.map(({ major, label, mc }) => {
                         const exact  = javaInstalls.find(j => j.major === major)
                         const status = !isTauri ? null
-                          : exact ? { cls: 'java-ok', text: '✓ installed' }
-                          :         { cls: 'java-dl', text: '↓ auto-download' }
+                          : exact ? { cls: 'java-ok', text: t('settings.java_found') }
+                          :         { cls: 'java-dl', text: t('settings.java_auto') }
                         return (
                           <div key={major} className="java-row">
                             <span className="java-ver">{label}</span>
@@ -322,7 +440,7 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                         )
                       })}
                     </div>
-                    <div className="setting-hint">Missing versions are downloaded automatically from adoptium.net on first launch.</div>
+                    <div className="setting-hint">{t('settings.java_hint')}</div>
                   </div>
                 </>}
 
@@ -340,71 +458,116 @@ function SettingsModal({ onClose }: { onClose: () => void }) {
                         <span className="about-logo-name">LiquidBounce</span>
                       </div>
                     </div>
-                    <p className="about-disclaimer">
-                      This launcher is not affiliated with, sponsored by, or endorsed by the LiquidBounce team or CCBlueX.
-                    </p>
+                    <p className="about-disclaimer">{t('settings.disclaimer')}</p>
                     <div className="about-info">
-                      <span className="about-ver">MLBV v0.0.1</span>
-                      <span className="about-stack">Tauri v2 · Rust · React · TypeScript</span>
+                      <span className="about-ver">MLBV v0.0.2</span>
+                      <span className="about-stack">{t('settings.stack')}</span>
                     </div>
                     <div className="about-update-row">
                       <button className="btn-secondary" onClick={handleManualUpdateCheck}
                         disabled={updateStatus === 'checking'}>
-                        {updateStatus === 'checking' ? 'Checking…' : 'Check for updates'}
+                        {updateStatus === 'checking' ? t('settings.checking') : t('settings.check_updates')}
                       </button>
                       {updateStatus === 'uptodate' && (
-                        <span className="about-update-ok">You're up to date</span>
+                        <span className="about-update-ok">{t('settings.up_to_date')}</span>
                       )}
                       {typeof updateStatus === 'object' && (
                         <span className="about-update-avail">
-                          v{updateStatus.version} available —{' '}
+                          v{updateStatus.version} {t('settings.update_available')} —{' '}
                           <button className="about-update-link"
                             onClick={() => isTauri && invoke('open_url', { url: updateStatus.htmlUrl }).catch(() => {})}>
-                            Download
+                            {t('update.download')}
                           </button>
                         </span>
                       )}
                     </div>
-                    <div className="about-by">by vlalikoffc.</div>
+                    <DebugInfoBlock />
+                    <div className="about-by">{t('settings.by')}</div>
+                  </div>
+                )}
+
+                {/* ── CUSTOMIZE ── */}
+                {tab === 'customize' && (
+                  <div className="customize-panel">
+                    <div className="setting-section-title">{t('settings.tab.customize')}</div>
+
+                    <div className="setting-group">
+                      <div className="setting-label-row">
+                        <div className="setting-label">{t('customize.accent')}</div>
+                        <Tip text={t('customize.accent_tip')} />
+                      </div>
+                      <div className="color-palette">
+                        {ACCENT_PRESETS.map(p => (
+                          <button key={p.hex}
+                            className={`color-swatch${customAccent.toLowerCase() === p.hex ? ' active' : ''}`}
+                            style={{ background: p.hex }} title={p.name}
+                            onClick={() => handleSetAccent(p.hex)} />
+                        ))}
+                      </div>
+                      <div className="color-hex-row">
+                        <div className="color-preview" style={{ background: customAccent }} />
+                        <input className="glass-input hex-input"
+                          value={hexInput}
+                          onChange={e => setHexInput(e.target.value)}
+                          onBlur={() => handleSetAccent(hexInput)}
+                          onKeyDown={e => e.key === 'Enter' && handleSetAccent(hexInput)}
+                          placeholder="#4ade80"
+                          maxLength={7}
+                          spellCheck={false}
+                        />
+                        <button className="btn-cancel" onClick={handleResetAccent}>{t('customize.reset')}</button>
+                      </div>
+                    </div>
+
+                    <div className="setting-group">
+                      <div className="setting-label-row">
+                        <label className="setting-toggle" style={{ flex: 1 }}>
+                          <input type="checkbox" checked={applyToLb} onChange={e => handleApplyToLbChange(e.target.checked)} />
+                          <span className="toggle-track"><span className="toggle-thumb"/></span>
+                          <span className="toggle-label">{t('customize.apply_lb')}</span>
+                        </label>
+                        <Tip text={t('customize.apply_lb_tip')} />
+                      </div>
+                    </div>
                   </div>
                 )}
 
                 {/* ── DANGER ── */}
                 {tab === 'danger' && (
                   <div className="danger-panel">
-                    <div className="danger-title">Danger Zone</div>
-                    <div className="danger-hint">These actions are permanent and cannot be undone.</div>
+                    <div className="danger-title">{t('settings.danger_title')}</div>
+                    <div className="danger-hint">{t('settings.danger_hint')}</div>
                     {!dangerOpen ? (
                       <button className="btn-danger-trigger"
                         onClick={() => { setDangerOpen(true); setCountdown(5) }}>
-                        Delete All Data
+                        {t('settings.danger_btn')}
                       </button>
                     ) : (
                       <div className="danger-confirm-box">
-                        <div className="danger-warn-title">⚠ This will permanently delete:</div>
+                        <div className="danger-warn-title">{t('settings.danger_warn')}</div>
                         <ul className="danger-list">
-                          <li>All accounts and login tokens</li>
-                          <li>All instances and their configurations</li>
-                          <li>Java runtimes downloaded by MLBV</li>
-                          <li>Downloaded Minecraft versions, assets and libraries</li>
-                          <li>All launcher settings (RAM, downloads, preferences)</li>
+                          <li>{t('settings.danger_item1')}</li>
+                          <li>{t('settings.danger_item2')}</li>
+                          <li>{t('settings.danger_item3')}</li>
+                          <li>{t('settings.danger_item4')}</li>
+                          <li>{t('settings.danger_item5')}</li>
                         </ul>
                         <div className="danger-countdown">
                           {countdown > 0
-                            ? `Please wait ${countdown}s before confirming…`
-                            : 'You may now confirm the deletion.'}
+                            ? t('settings.danger_wait').replace('{0}', String(countdown))
+                            : t('settings.danger_confirm_hint')}
                         </div>
                         <div className="danger-actions">
                           <button className="btn-cancel"
                             onClick={() => { setDangerOpen(false); setCountdown(5) }}>
-                            Cancel
+                            {t('settings.cancel')}
                           </button>
                           <button
                             className={`btn-delete-confirm${countdown <= 0 ? ' enabled' : ''}`}
                             disabled={countdown > 0 || deleting}
                             onClick={handleDelete}
                           >
-                            {deleting ? 'Deleting…' : 'Confirm Delete'}
+                            {deleting ? t('settings.deleting') : t('settings.confirm_delete')}
                           </button>
                         </div>
                       </div>
@@ -440,6 +603,8 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   const [error, setError]       = useState('')
 
   // LB branch state
+  const t = useT(getLang())
+
   const [lbBranches, setLbBranches]       = useState<string[]>(['nextgen', 'legacy'])
   const [lbBranch, setLbBranch]           = useState('nextgen')
   const [lbVersionsMap, setLbVersionsMap] = useState<Record<string, LBVersion[]>>({})
@@ -520,7 +685,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
     const finalName = displayName.trim()
     if (!finalName) return
     if (existingNames.includes(finalName)) {
-      setError('An instance with this name already exists')
+      setError(t('inst.name_taken'))
       setShake(true)
       setTimeout(() => setShake(false), 500)
       return
@@ -548,11 +713,11 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
         onClick={e => e.stopPropagation()}
       >
         <div className="modal-head">
-          <span className="modal-title">New Instance</span>
+          <span className="modal-title">{instType === 'lb' ? t('inst.modal.title_lb') : t('inst.modal.title_mc')}</span>
           <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
             <div className="vtabs">
-              <button className={`vtab${instType === 'mc' ? ' on' : ''}`} onClick={() => setInstType('mc')}>Minecraft</button>
-              <button className={`vtab${instType === 'lb' ? ' on' : ''}`} onClick={() => setInstType('lb')}>LiquidBounce</button>
+              <button className={`vtab${instType === 'mc' ? ' on' : ''}`} onClick={() => setInstType('mc')}>{t('tab.mc')}</button>
+              <button className={`vtab${instType === 'lb' ? ' on' : ''}`} onClick={() => setInstType('lb')}>{t('tab.lb')}</button>
             </div>
             <button className="modal-close" onClick={onClose}>×</button>
           </div>
@@ -563,7 +728,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
             <div className="vtabs" style={{ padding: '8px 16px 0', gap: 4, display: 'flex' }}>
               {(['release','snapshot','old','all'] as VFilter[]).map(f => (
                 <button key={f} className={`vtab${vFilter === f ? ' on' : ''}`} onClick={() => setVFilter(f)}>
-                  {f === 'release' ? 'Releases' : f === 'snapshot' ? 'Snapshots' : f === 'old' ? 'Legacy' : 'All'}
+                  {f === 'release' ? t('inst.modal.filter.release') : f === 'snapshot' ? t('inst.modal.filter.snapshot') : f === 'old' ? t('inst.modal.filter.old') : t('inst.modal.filter.all')}
                 </button>
               ))}
             </div>
@@ -596,17 +761,17 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
             </div>
             <div className="vlist">
               {lbLoading ? (
-                <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Загрузка…</div>
+                <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('loading')}</div>
               ) : lbLoadError ? (
                 <div style={{ padding: 16, display: 'flex', flexDirection: 'column', gap: 8 }}>
-                  <div style={{ color: '#f87171', fontSize: 12 }}>Ошибка: {lbLoadError}</div>
+                  <div style={{ color: '#f87171', fontSize: 12 }}>{t('error.prefix')} {lbLoadError}</div>
                   <button className="btn-retry" style={{ alignSelf: 'flex-start' }}
                     onClick={() => { loadedBranches.current.delete(lbBranch); loadBranchVersions(lbBranch) }}>
-                    Повторить
+                    {t('error.retry')}
                   </button>
                 </div>
               ) : currentLbVersions.length === 0 ? (
-                <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>Нет версий.</div>
+                <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.no_versions')}</div>
               ) : currentLbVersions.map(v => (
                 <motion.button key={v.tag}
                   className={`vitem${v.tag === selVer ? ' picked lb-picked' : ''}`}
@@ -629,20 +794,20 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
             value={displayName}
             onChange={e => { setName(e.target.value); setNameEdited(true); setError('') }}
             onKeyDown={e => e.key === 'Enter' && handleCreate()}
-            placeholder="Instance name…"
+            placeholder={t('inst.modal.name_ph')}
             maxLength={64}
           />
           {error && <div className="inst-error">{error}</div>}
         </div>
 
         <div className="inst-modal-footer">
-          <button className="btn-cancel" onClick={onClose}>Cancel</button>
+          <button className="btn-cancel" onClick={onClose}>{t('inst.modal.cancel')}</button>
           <button
             className={`btn-ok${instType === 'lb' ? ' lb-btn' : ''}`}
             onClick={handleCreate}
             disabled={!selVer}
           >
-            Create
+            {t('inst.modal.create')}
           </button>
         </div>
       </motion.div>
@@ -700,6 +865,7 @@ function InstanceCtxMenu({ target, isLb, onAction, onClose }: {
   onAction: (a: CtxAction, inst: Instance) => void
   onClose: () => void
 }) {
+  const t = useT(getLang())
   const W = 176, H = 196
   const x = Math.min(target.x, window.innerWidth  - W - 8)
   const y = Math.min(target.y, window.innerHeight - H - 8)
@@ -712,21 +878,21 @@ function InstanceCtxMenu({ target, isLb, onAction, onClose }: {
         exit={{ opacity: 0, scale: 0.92, y: -8 }} transition={{ duration: 0.12 }}
       >
         <button className="ctx-item" onClick={() => { onAction('rename', target.inst); onClose() }}>
-          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M13 3l4 4-9 9H4v-4L13 3z"/></svg>
-          Rename
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M13 3l4 4-9 9H4v-4L13 3z"/></svg>
+          {t('ctx.rename')}
         </button>
         <button className="ctx-item" onClick={() => { onAction('settings', target.inst); onClose() }}>
-          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6"><circle cx="10" cy="10" r="2.5"/><path d="M10 2v2M10 16v2M2 10h2M16 10h2M4.22 4.22l1.42 1.42M14.36 14.36l1.42 1.42M4.22 15.78l1.42-1.42M14.36 5.64l1.42-1.42"/></svg>
-          Settings
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.27 2h-.54a1.5 1.5 0 0 0-1.5 1.5v.14a1.5 1.5 0 0 1-.75 1.3l-.32.18a1.5 1.5 0 0 1-1.5 0l-.12-.06a1.5 1.5 0 0 0-2.05.55l-.27.47a1.5 1.5 0 0 0 .55 2.05l.11.07a1.5 1.5 0 0 1 .75 1.3v.38a1.5 1.5 0 0 1-.75 1.3l-.11.07a1.5 1.5 0 0 0-.55 2.05l.27.47a1.5 1.5 0 0 0 2.05.55l.12-.06a1.5 1.5 0 0 1 1.5 0l.32.18a1.5 1.5 0 0 1 .75 1.3v.14A1.5 1.5 0 0 0 9.73 18h.54a1.5 1.5 0 0 0 1.5-1.5v-.14a1.5 1.5 0 0 1 .75-1.3l.32-.18a1.5 1.5 0 0 1 1.5 0l.12.06a1.5 1.5 0 0 0 2.05-.55l.27-.47a1.5 1.5 0 0 0-.55-2.05l-.11-.07A1.5 1.5 0 0 1 15.37 11v-.38a1.5 1.5 0 0 1 .75-1.3l.11-.07a1.5 1.5 0 0 0 .55-2.05l-.27-.47a1.5 1.5 0 0 0-2.05-.55l-.12.06a1.5 1.5 0 0 1-1.5 0l-.32-.18a1.5 1.5 0 0 1-.75-1.3V3.5A1.5 1.5 0 0 0 10.27 2z"/><circle cx="10" cy="10" r="2.25"/></svg>
+          {t('ctx.settings')}
         </button>
         <div className="ctx-sep" />
         <button className="ctx-item ctx-warn" onClick={() => { onAction('reinstall', target.inst); onClose() }}>
-          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6"><path d="M4 4v5h5"/><path d="M16 16v-5h-5"/><path d="M4.93 9A8 8 0 1 1 4 13.42"/></svg>
-          Reinstall
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M4 4v5h5"/><path d="M16 16v-5h-5"/><path d="M4.93 9A8 8 0 1 1 4 13.42"/></svg>
+          {t('ctx.reinstall')}
         </button>
         <button className="ctx-item ctx-danger" onClick={() => { onAction('delete', target.inst); onClose() }}>
-          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6"><polyline points="4 5 5 5 16 5"/><path d="M15 5l-.9 11H5.9L5 5"/><path d="M8 9v5M12 9v5"/><path d="M7 5V3.5A.5.5 0 0 1 7.5 3h5a.5.5 0 0 1 .5.5V5"/></svg>
-          Delete
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><polyline points="4 5 5 5 16 5"/><path d="M15 5l-.9 11H5.9L5 5"/><path d="M8 9v5M12 9v5"/><path d="M7 5V3.5A.5.5 0 0 1 7.5 3h5a.5.5 0 0 1 .5.5V5"/></svg>
+          {t('ctx.delete')}
         </button>
       </motion.div>
     </>
@@ -736,6 +902,7 @@ function InstanceCtxMenu({ target, isLb, onAction, onClose }: {
 // ─── Reinstall Modal ──────────────────────────────────────────────────────────
 
 function ReinstallModal({ inst, isLb, onClose }: { inst: Instance; isLb: boolean; onClose: () => void }) {
+  const t = useT(getLang())
   const [mode, setMode] = useState<'keep' | 'wipe'>('keep')
   const [busy, setBusy] = useState(false)
 
@@ -755,31 +922,31 @@ function ReinstallModal({ inst, isLb, onClose }: { inst: Instance; isLb: boolean
         onClick={e => e.stopPropagation()}
       >
         <div className="modal-head">
-          <span className="modal-title">Reinstall — {inst.name}</span>
+          <span className="modal-title">{t('reinstall.title')} — {inst.name}</span>
           <button className="modal-close" onClick={onClose}>×</button>
         </div>
         <div className="reinstall-body">
-          <p className="reinstall-desc">Choose what to keep when reinstalling this instance.</p>
+          <p className="reinstall-desc">{t('reinstall.choose')}</p>
           <label className={`reinstall-opt${mode === 'keep' ? ' active' : ''}`} onClick={() => setMode('keep')}>
             <span className="reinstall-radio" />
             <div>
-              <div className="reinstall-opt-title">Keep saves & options</div>
-              <div className="reinstall-opt-sub">Deletes mods, configs, and mod loaders. Keeps worlds, screenshots, resource packs and options.txt.</div>
+              <div className="reinstall-opt-title">{t('reinstall.keep')}</div>
+              <div className="reinstall-opt-sub">{t('reinstall.keep_desc')}</div>
             </div>
           </label>
           <label className={`reinstall-opt${mode === 'wipe' ? ' active danger-opt' : ''}`} onClick={() => setMode('wipe')}>
             <span className="reinstall-radio" />
             <div>
-              <div className="reinstall-opt-title">Full wipe</div>
-              <div className="reinstall-opt-sub">Deletes the entire instance folder. All worlds, mods, saves and settings are permanently removed.</div>
+              <div className="reinstall-opt-title">{t('reinstall.wipe')}</div>
+              <div className="reinstall-opt-sub">{t('reinstall.wipe_desc')}</div>
             </div>
           </label>
         </div>
         <div className="inst-modal-footer">
-          <button className="btn-cancel" onClick={onClose}>Cancel</button>
+          <button className="btn-cancel" onClick={onClose}>{t('reinstall.cancel')}</button>
           <button className={`btn-ok${mode === 'wipe' ? ' btn-delete-confirm enabled' : ''}`}
             onClick={handleReinstall} disabled={busy}>
-            {busy ? 'Reinstalling…' : 'Reinstall'}
+            {busy ? t('reinstall.doing') : t('reinstall.btn')}
           </button>
         </div>
       </motion.div>
@@ -790,6 +957,7 @@ function ReinstallModal({ inst, isLb, onClose }: { inst: Instance; isLb: boolean
 // ─── Instance Settings Modal ──────────────────────────────────────────────────
 
 function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: boolean; onClose: () => void }) {
+  const t = useT(getLang())
   const ramKey = `mlbv_inst_ram_${inst.id}`
   const globalRam = Number(localStorage.getItem('mlbv_ram') ?? '2048') || 2048
   const [useCustomRam, setUseCustomRam] = useState(() => !!localStorage.getItem(ramKey))
@@ -827,7 +995,7 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
         </div>
         <div className="inst-settings-body">
           <div className="setting-group">
-            <div className="setting-label">RAM Override</div>
+            <div className="setting-label">{t('isettings.ram')}</div>
             <label className="setting-toggle">
               <input type="checkbox" checked={useCustomRam} onChange={e => setUseCustomRam(e.target.checked)} />
               <span className="toggle-track ist-toggle-track"><span className="toggle-thumb" /></span>
@@ -839,27 +1007,27 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
             )}
           </div>
           <div className="setting-group">
-            <div className="setting-label">Logs</div>
+            <div className="setting-label">{t('isettings.logs')}</div>
             <div className="inst-log-actions">
               <button className="btn-secondary" onClick={() => { navigator.clipboard.writeText(logText); setLogBusy(true); setTimeout(() => setLogBusy(false), 1200) }}>
-                {logBusy ? 'Copied!' : 'Copy latest.log'}
+                {logBusy ? t('isettings.copied') : t('isettings.copy_log')}
               </button>
               {isTauri && (
                 <button className="btn-secondary" onClick={() =>
                   invoke('open_instance_logs_folder', { instanceName: inst.name }).catch(() => {})
-                }>Open logs folder</button>
+                }>{t('isettings.open_logs')}</button>
               )}
             </div>
             {logLines
               ? <pre className="inst-log-preview">{logLines}</pre>
-              : <div className="setting-hint">No log yet — launch the instance first.</div>
+              : <div className="setting-hint">{t('isettings.no_log')}</div>
             }
           </div>
           <div className="setting-group">
-            <div className="setting-label">Instance Info</div>
+            <div className="setting-label">{t('isettings.info')}</div>
             <div className="setting-hint">
               Version: {inst.version} · MC {inst.mcVersion}<br/>
-              Type: {inst.type === 'lb' ? 'LiquidBounce (Fabric)' : 'Vanilla Minecraft'}
+              Type: {inst.type === 'lb' ? t('isettings.type_lb') : t('isettings.type_mc')}
             </div>
           </div>
         </div>
@@ -871,13 +1039,39 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
 // ─── Update Modal ─────────────────────────────────────────────────────────────
 
 function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void }) {
-  const handleDownload = () => {
-    if (isTauri) invoke('open_url', { url: info.htmlUrl }).catch(() => {})
-    onClose()
+  const t = useT(getLang())
+  const [phase, setPhase] = useState<'ask' | 'downloading' | 'installing'>('ask')
+  const [percent, setPercent] = useState(0)
+  const [dlError, setDlError] = useState('')
+
+  const handleDownload = async () => {
+    if (!isTauri || !info.assetUrl) {
+      invoke('open_url', { url: info.htmlUrl }).catch(() => {})
+      onClose()
+      return
+    }
+    setPhase('downloading')
+    setDlError('')
+    const unlisten = await listen<{ percent: number }>('update-progress', e => {
+      setPercent(Math.round(e.payload.percent))
+    })
+    try {
+      await invoke('download_update', { url: info.assetUrl })
+      unlisten()
+      setPhase('installing')
+      await new Promise(r => setTimeout(r, 700))
+      await invoke('apply_update', { newVersion: info.version })
+      // app.exit(0) is called in Rust; this line is a safety fallback
+    } catch (e) {
+      unlisten()
+      setDlError(String(e))
+      setPhase('ask')
+    }
   }
+
   return (
     <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-      onClick={onClose}
+      onClick={phase === 'ask' ? onClose : undefined}
     >
       <motion.div className="modal glass update-modal"
         initial={{ opacity: 0, scale: 0.9, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }}
@@ -886,22 +1080,96 @@ function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void 
       >
         <div className="modal-head">
           <div>
-            <span className="modal-title">Update available</span>
+            <span className="modal-title">{t('update.title')}</span>
             <span className="update-tag-badge">v{info.version}</span>
           </div>
-          <button className="modal-close" onClick={onClose}>×</button>
+          {phase === 'ask' && <button className="modal-close" onClick={onClose}>×</button>}
         </div>
-        {info.body ? (
-          <pre className="update-changelog">{info.body.trim()}</pre>
-        ) : (
-          <p className="update-nobody">No release notes provided.</p>
+
+        {phase === 'ask' && <>
+          {info.body
+            ? <pre className="update-changelog">{info.body.trim()}</pre>
+            : <p className="update-nobody">{t('update.no_notes')}</p>
+          }
+          {dlError && <div className="inst-error" style={{ margin: '0 18px 10px' }}>{dlError}</div>}
+          <div className="inst-modal-footer">
+            <button className="btn-cancel" onClick={onClose}>{t('update.later')}</button>
+            <button className="btn-ok" onClick={handleDownload}>{t('update.download')}</button>
+          </div>
+        </>}
+
+        {(phase === 'downloading' || phase === 'installing') && (
+          <div className="update-dl-wrap">
+            <div className="update-dl-label">
+              {phase === 'downloading' ? t('update.downloading') : t('update.installing')}
+            </div>
+            <div className="update-dl-bar-bg">
+              <motion.div className="update-dl-bar-fill"
+                animate={{ width: phase === 'installing' ? '100%' : `${percent}%` }}
+                transition={{ duration: 0.25, ease: 'easeOut' }}
+              />
+            </div>
+            {phase === 'downloading' && (
+              <div className="update-dl-pct">{percent}%</div>
+            )}
+            {phase === 'installing' && (
+              <div className="update-dl-pct">{t('update.installing')}</div>
+            )}
+          </div>
         )}
-        <div className="inst-modal-footer">
-          <button className="btn-cancel" onClick={onClose}>Later</button>
-          <button className="btn-ok" onClick={handleDownload}>Download</button>
-        </div>
       </motion.div>
     </motion.div>
+  )
+}
+
+// ─── Debug Info Block ─────────────────────────────────────────────────────────
+
+function DebugInfoBlock() {
+  const [info, setInfo] = useState<Record<string, unknown> | null>(null)
+  const [open, setOpen] = useState(false)
+  const [copied, setCopied] = useState(false)
+
+  const load = async () => {
+    if (!isTauri) return
+    try {
+      const d = await invoke<Record<string, unknown>>('get_debug_info')
+      setInfo(d)
+    } catch (e) {
+      setInfo({ error: String(e) })
+    }
+  }
+
+  const toggle = () => {
+    if (!open && !info) load()
+    setOpen(o => !o)
+  }
+
+  const copy = () => {
+    if (!info) return
+    navigator.clipboard.writeText(JSON.stringify(info, null, 2)).then(() => {
+      setCopied(true)
+      setTimeout(() => setCopied(false), 2000)
+    })
+  }
+
+  return (
+    <div className="debug-block">
+      <button className="debug-toggle" onClick={toggle}>
+        {open ? '▾' : '▸'} Debug info
+      </button>
+      {open && (
+        <div className="debug-body">
+          {info ? (
+            <>
+              <pre className="debug-pre">{JSON.stringify(info, null, 2)}</pre>
+              <button className="debug-copy" onClick={copy}>{copied ? '✓ Copied' : 'Copy'}</button>
+            </>
+          ) : (
+            <span className="debug-loading">Loading…</span>
+          )}
+        </div>
+      )}
+    </div>
   )
 }
 
@@ -912,6 +1180,13 @@ export default function App() {
   const [setupDone, setSetupDone] = useState(() => !!localStorage.getItem('mlbv_setup_done'))
   const [lang, setLang] = useState<Lang>(() => getLang())
   const t = useT(lang)
+
+  // Restore saved accent color on mount
+  useEffect(() => {
+    const saved = localStorage.getItem('mlbv_accent')
+    const lbSame = localStorage.getItem('mlbv_lb_accent_same') === '1'
+    if (saved) applyAccent(saved, lbSame)
+  }, [])
 
   // App state
   const [appState, setAppState]     = useState<AppState>('loading')
@@ -991,6 +1266,7 @@ export default function App() {
 
   // Update check
   const [updateInfo, setUpdateInfo]           = useState<UpdateInfo | null>(null)
+  const [justUpdated, setJustUpdated]         = useState<string | null>(null)
 
   // Crash dialog
   const [crashInfo, setCrashInfo]             = useState<CrashInfo | null>(null)
@@ -1042,12 +1318,16 @@ export default function App() {
 
   useEffect(() => { fetchVersions() }, [fetchVersions])
 
-  // Check for updates once the app is ready
+  // Check for updates once the app is ready; also check if we just updated
   useEffect(() => {
     if (appState !== 'ready' || !isTauri) return
-    type RawRelease = { version: string; tag_name: string; body: string; html_url: string }
+    // Was the app just updated?
+    invoke<string>('get_just_updated')
+      .then(ver => { if (ver) { setJustUpdated(ver); setTimeout(() => setJustUpdated(null), 5000) } })
+      .catch(() => {})
+    type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string }
     invoke<RawRelease | null>('check_for_update')
-      .then(r => { if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url }) })
+      .then(r => { if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url }) })
       .catch(() => {})
   }, [appState])
 
@@ -1303,7 +1583,7 @@ export default function App() {
                 {!sidebarCollapsed && (
                   <motion.div className="s-label"
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}
-                  >Account</motion.div>
+                  >{t('sidebar.account')}</motion.div>
                 )}
               </AnimatePresence>
               <AnimatePresence mode="wait">
@@ -1321,9 +1601,19 @@ export default function App() {
                     }
                     <AnimatePresence>
                       {!sidebarCollapsed && (
-                        <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
-                          <div className="acct-name">{selected.username}</div>
-                          <div className="acct-badge">{selected.type === 'offline' ? 'Offline' : 'Microsoft'}</div>
+                        <motion.div className="acct-card-info" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.15 }}>
+                          <div className="acct-card-text">
+                            <div className="acct-name">{selected.username}</div>
+                            <div className="acct-badge">{selected.type === 'offline' ? t('sw.acct.offline.label') : t('sw.acct.ms.label')}</div>
+                          </div>
+                          <motion.button className="acct-settings-btn" title={t('settings.title')}
+                            onClick={e => { e.stopPropagation(); setShowSettings(true) }}
+                            whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }}
+                          >
+                            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                              <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
+                            </svg>
+                          </motion.button>
                         </motion.div>
                       )}
                     </AnimatePresence>
@@ -1331,7 +1621,7 @@ export default function App() {
                 ) : (
                   <motion.div key="no-acct" className="no-acct"
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  >{sidebarCollapsed ? '?' : 'No account selected'}</motion.div>
+                  >{sidebarCollapsed ? '?' : t('no_account')}</motion.div>
                 )}
               </AnimatePresence>
               <AnimatePresence>
@@ -1358,7 +1648,7 @@ export default function App() {
                 {!sidebarCollapsed && (
                   <motion.div className="s-label"
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }} transition={{ duration: 0.18 }}
-                  >{activeTab === 'mc' ? 'Instances' : 'LiquidBounce'}</motion.div>
+                  >{activeTab === 'mc' ? t('sidebar.instances') : t('tab.lb')}</motion.div>
                 )}
               </AnimatePresence>
 
@@ -1400,7 +1690,7 @@ export default function App() {
                 ) : (
                   <motion.div key="no-inst" className="no-acct"
                     initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  >{sidebarCollapsed ? '?' : 'No instance'}</motion.div>
+                  >{sidebarCollapsed ? '?' : t('no_instance')}</motion.div>
                 )}
               </AnimatePresence>
 
@@ -1452,24 +1742,23 @@ export default function App() {
 
             {/* Bottom bar */}
             <div className="s-bottom">
-              <div className="s-bottom-left">
-                <motion.button className="btn-icon-sm" title="Settings"
+              {sidebarCollapsed && (
+                <motion.button className="btn-icon-sm" title={t('settings.title')}
                   onClick={() => setShowSettings(true)}
                   whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.93 }}
                 >
-                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
-                    <circle cx="12" cy="12" r="3"/>
-                    <path d="M12 2v3M12 19v3M4.22 4.22l2.12 2.12M17.66 17.66l2.12 2.12M2 12h3M19 12h3M4.22 19.78l2.12-2.12M17.66 6.34l2.12-2.12"/>
+                  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                    <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
                   </svg>
                 </motion.button>
-              </div>
+              )}
               <motion.button className="btn-icon-sm collapse-toggle"
-                title={sidebarCollapsed ? 'Expand' : 'Collapse'}
+                title={sidebarCollapsed ? t('sidebar.expand') : t('sidebar.collapse')}
                 onClick={() => setSidebarCollapsed(c => !c)}
                 whileHover={{ scale: 1.08 }} whileTap={{ scale: 0.93 }}
                 animate={{ rotate: sidebarCollapsed ? 180 : 0 }} transition={spring}
               >
-                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+                <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                   <path d="M15 6l-6 6 6 6"/>
                 </svg>
               </motion.button>
@@ -1521,7 +1810,7 @@ export default function App() {
                       transition={{ ...spring, delay: 0.12 }}
                     >
                       <span className="dot" />
-                      {activeInstance ? activeInstance.name : 'No instance selected'}
+                      {activeInstance ? activeInstance.name : t('no_instance')}
                     </motion.div>
                   </div>
                   <div className="launch-zone">
@@ -1596,8 +1885,8 @@ export default function App() {
                     {!launching && selected && activeInstance && (
                       <motion.div className="hint-text" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}>
                         {gameRunning === 'mc'
-                          ? <>Запущено · <strong style={{ color: 'var(--accent)' }}>{selected.username}</strong></>
-                          : <>Playing as <strong style={{ color: 'var(--accent)' }}>{selected.username}</strong> · {activeInstance.mcVersion}</>
+                          ? <>{t('status.running')} · <strong style={{ color: 'var(--accent)' }}>{selected.username}</strong></>
+                          : <>{t('status.playing_as')} <strong style={{ color: 'var(--accent)' }}>{selected.username}</strong> · {activeInstance.mcVersion}</>
                         }
                       </motion.div>
                     )}
@@ -1701,7 +1990,7 @@ export default function App() {
                     {!launching && selected && activeInstance && (
                       <motion.div className="hint-text lb-hint" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}>
                         {gameRunning === 'lb'
-                          ? <>Запущено · <strong style={{ color: 'var(--lb-accent)' }}>{selected.username}</strong></>
+                          ? <>{t('status.running')} · <strong style={{ color: 'var(--lb-accent)' }}>{selected.username}</strong></>
                           : <><strong style={{ color: 'var(--lb-accent)' }}>{selected.username}</strong> · {activeInstance.name} (MC {activeInstance.mcVersion})</>
                         }
                       </motion.div>
@@ -1739,23 +2028,23 @@ export default function App() {
                 onClick={e => e.stopPropagation()}
               >
                 <div className="modal-head">
-                  <span className="modal-title">Add Account</span>
+                  <span className="modal-title">{t('acct.title')}</span>
                   <button className="modal-close" onClick={() => { setShowAddAcct(false); setMsError('') }}>×</button>
                 </div>
                 <div className="acct-modal-body">
                   <div>
-                    <div className="field-label">Offline Account</div>
+                    <div className="field-label">{t('acct.offline_label')}</div>
                     <div className="input-row">
                       <input className="glass-input" placeholder="Enter username…" value={username}
                         onChange={e => setUsername(e.target.value)}
                         onKeyDown={e => e.key === 'Enter' && addOffline()}
                         maxLength={16} autoFocus />
-                      <button className="btn-ok" onClick={addOffline} disabled={!username.trim()}>Add</button>
+                      <button className="btn-ok" onClick={addOffline} disabled={!username.trim()}>{t('acct.add')}</button>
                     </div>
                   </div>
-                  <div className="or-divider">or</div>
+                  <div className="or-divider">{t('acct.or')}</div>
                   <div>
-                    <div className="field-label">Licensed Account</div>
+                    <div className="field-label">{t('acct.ms_label')}</div>
                     <button className="btn-ms" onClick={handleMsLogin} disabled={msLoading}>
                       {msLoading ? (
                         <span className="ms-spinner" />
@@ -1767,10 +2056,10 @@ export default function App() {
                           <rect x="11" y="11" width="9" height="9" fill="#ffb900"/>
                         </svg>
                       )}
-                      {msLoading ? 'Complete sign-in in the popup…' : 'Sign in with Microsoft'}
+                      {msLoading ? t('acct.ms_loading') : t('acct.ms_btn')}
                     </button>
                     {msError && <div className="ms-error">{msError}</div>}
-                    {!msError && <div className="ms-note">{msLoading ? 'Complete login in the browser window that opened' : 'Requires a purchased Minecraft license'}</div>}
+                    {!msError && <div className="ms-note">{msLoading ? t('acct.ms_note_loading') : t('acct.ms_note')}</div>}
                   </div>
                 </div>
               </motion.div>
@@ -1780,7 +2069,7 @@ export default function App() {
 
         {/* ── SETTINGS MODAL ── */}
         <AnimatePresence>
-          {showSettings && <SettingsModal onClose={() => setShowSettings(false)} />}
+          {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onLangChange={l => setLang(l)} />}
         </AnimatePresence>
 
         {/* ── INSTANCE CONTEXT MENU ── */}
@@ -1828,6 +2117,24 @@ export default function App() {
         <AnimatePresence>
           {updateInfo && (
             <UpdateModal info={updateInfo} onClose={() => setUpdateInfo(null)} />
+          )}
+        </AnimatePresence>
+
+        {/* ── JUST UPDATED TOAST ── */}
+        <AnimatePresence>
+          {justUpdated && (
+            <motion.div className="just-updated-toast"
+              initial={{ opacity: 0, y: 16, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+              transition={spring}
+            >
+              <svg viewBox="0 0 16 16" fill="none" style={{ width: 15, height: 15, flexShrink: 0 }}>
+                <circle cx="8" cy="8" r="7" fill="rgba(74,222,128,0.2)" stroke="rgba(74,222,128,0.5)" strokeWidth="1"/>
+                <path d="M5 8l2 2 4-4" stroke="#4ade80" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"/>
+              </svg>
+              {t('update.done')} v{justUpdated}
+            </motion.div>
           )}
         </AnimatePresence>
 

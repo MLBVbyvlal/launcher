@@ -56,6 +56,9 @@ const S: Record<Lang, Record<string, string>> = {
     'sw.java.error': 'Failed — will retry on launch',
     'sw.java.finish': 'Start Launcher',
     'sw.java.wait': 'Please wait…',
+    'sw.java.all_ready': '✓ All Java runtimes ready',
+    'sw.java.dl_progress': 'Downloading Java… {0}%',
+    'sw.nick.warn.your_nick': 'Your username:',
 
     // Features showcase
     'feat.lb': 'LiquidBounce Built-in',
@@ -91,26 +94,172 @@ const S: Record<Lang, Record<string, string>> = {
     'no_instance': 'Create an instance',
     'add_account': '+ Add Account',
     'new_instance': '+ New Instance',
+    'sidebar.account': 'Account',
+    'sidebar.instances': 'Instances',
+    'settings.language': 'Language',
+    'sidebar.expand': 'Expand',
+    'sidebar.collapse': 'Collapse',
 
     // "Other tab running"
     'running.lb': 'LiquidBounce is running — switch to LB tab to stop',
     'running.mc': 'Minecraft is running — switch to MC tab to stop',
     'busy': 'Another game is launching — please wait',
 
-    // Settings
+    // Settings tabs
     'settings.title': 'Settings',
+    'settings.tab.general': 'General',
+    'settings.tab.performance': 'Performance',
+    'settings.tab.java': 'Java',
+    'settings.tab.about': 'About',
+    'settings.tab.danger': 'Danger Zone',
+
+    // Settings — general
     'settings.game_dir': 'Game Directory',
-    'settings.ram': 'RAM',
-    'settings.concurrent': 'Parallel Downloads',
-    'settings.java': 'Java',
-    'settings.about': 'About',
     'settings.close_on_launch': 'Hide launcher when game starts',
     'settings.reset_setup': 'Reset Setup Wizard',
     'settings.reset_setup_hint': 'The wizard will appear again on next launch.',
     'settings.done': 'Done',
+
+    // Settings — performance
+    'settings.ram': 'RAM',
+    'settings.concurrent': 'Parallel Downloads',
+
+    // Settings — java
+    'settings.java': 'Java',
     'settings.java_auto': '↓ auto-download',
     'settings.java_found': '✓ found',
     'settings.java_hint': 'Missing versions download automatically on first launch.',
+
+    // Settings — about
+    'settings.about': 'About',
+    'settings.check_updates': 'Check for updates',
+    'settings.checking': 'Checking…',
+    'settings.up_to_date': "You're up to date",
+    'settings.update_available': 'available',
+    'settings.stack': 'Tauri v2 · Rust · React · TypeScript',
+    'settings.disclaimer': 'This launcher is not affiliated with, sponsored by, or endorsed by the LiquidBounce team or CCBlueX.',
+    'settings.by': 'by vlalikoffc.',
+
+    // Settings — danger
+    'settings.danger_title': 'Danger Zone',
+    'settings.danger_hint': 'These actions are permanent and cannot be undone.',
+    'settings.danger_btn': 'Delete All Data',
+    'settings.danger_warn': '⚠ This will permanently delete:',
+    'settings.danger_item1': 'All accounts and login tokens',
+    'settings.danger_item2': 'All instances and their configurations',
+    'settings.danger_item3': 'Java runtimes downloaded by MLBV',
+    'settings.danger_item4': 'Downloaded Minecraft versions, assets and libraries',
+    'settings.danger_item5': 'All launcher settings (RAM, downloads, preferences)',
+    'settings.danger_wait': 'Please wait {0}s before confirming…',
+    'settings.danger_confirm_hint': 'You may now confirm the deletion.',
+    'settings.cancel': 'Cancel',
+    'settings.deleting': 'Deleting…',
+    'settings.confirm_delete': 'Confirm Delete',
+
+    // Status hints below play button
+    'status.running': 'Running',
+    'status.playing_as': 'Playing as',
+    'status.playing_ver': 'MC',
+
+    // Instance modal
+    'inst.modal.title_mc': 'New Minecraft Instance',
+    'inst.modal.title_lb': 'New LiquidBounce Instance',
+    'inst.modal.name': 'Instance Name',
+    'inst.modal.name_ph': 'My Instance',
+    'inst.modal.version': 'Version',
+    'inst.modal.branch': 'Branch',
+    'inst.modal.cancel': 'Cancel',
+    'inst.modal.create': 'Create',
+    'inst.modal.filter.release': 'Releases',
+    'inst.modal.filter.snapshot': 'Snapshots',
+    'inst.modal.filter.old': 'Old',
+    'inst.modal.filter.all': 'All',
+
+    // Context menu
+    'ctx.rename': 'Rename',
+    'ctx.settings': 'Settings',
+    'ctx.reinstall': 'Reinstall',
+    'ctx.delete': 'Delete',
+
+    // Reinstall modal
+    'reinstall.title': 'Reinstall',
+    'reinstall.keep': 'Keep worlds & saves',
+    'reinstall.keep_desc': 'Deletes mods, configs, and mod loaders. Keeps worlds, screenshots, resource packs and options.txt.',
+    'reinstall.wipe': 'Full wipe',
+    'reinstall.wipe_desc': 'Deletes the entire instance folder. All worlds, mods, saves and settings are permanently removed.',
+    'reinstall.cancel': 'Cancel',
+    'reinstall.doing': 'Reinstalling…',
+    'reinstall.btn': 'Reinstall',
+
+    // Instance settings modal
+    'isettings.ram': 'RAM Override',
+    'isettings.ram_hint': 'Leave empty to use global default',
+    'isettings.logs': 'Logs',
+    'isettings.open_logs': 'Open logs folder',
+    'isettings.no_log': 'No log yet — launch the instance first.',
+    'isettings.info': 'Instance Info',
+    'isettings.type_lb': 'LiquidBounce (Fabric)',
+    'isettings.type_mc': 'Vanilla Minecraft',
+
+    // Update modal
+    'update.title': 'Update available',
+    'update.no_notes': 'No release notes provided.',
+    'update.later': 'Later',
+    'update.download': 'Download',
+    'update.downloading': 'Downloading update…',
+    'update.installing': 'Installing…',
+    'update.done': 'Updated to',
+
+    // Add account modal
+    'acct.title': 'Add Account',
+    'acct.offline_label': 'Offline Account',
+    'acct.add': 'Add',
+    'acct.or': 'or',
+    'acct.ms_label': 'Licensed Account',
+    'acct.ms_btn': 'Sign in with Microsoft',
+    'acct.ms_loading': 'Complete sign-in in the popup…',
+    'acct.ms_note_loading': 'Complete login in the browser window that opened',
+    'acct.ms_note': 'Requires a purchased Minecraft license',
+
+    // Misc
+    'loading': 'Loading…',
+    'error.retry': 'Try again',
+    'launcher.subtitle': 'Minecraft Launcher by vlalikoffc',
+    'dl.paused': '⏸ Paused',
+    'dl.resume': '▶ Resume',
+    'dl.pause': '⏸ Pause',
+    'dl.cancel': '✕ Cancel',
+
+    // Performance warnings
+    'perf.warn.low': 'Low thread count — downloads will be slow.',
+    'perf.warn.high': 'High thread count — may cause issues on slow connections.',
+
+    // Settings — game dir hint
+    'settings.game_dir_hint': 'Shared libs, assets and Java runtimes are stored here. Instance saves are under instances/.',
+
+    // Settings — Customize tab
+    'settings.tab.customize': 'Customize',
+    'customize.accent': 'Accent Color',
+    'customize.accent_tip': 'Changes the highlight color used throughout the launcher — play button, badges, sliders, and more.',
+    'customize.reset': 'Reset',
+    'customize.apply_lb': 'Apply to LiquidBounce tab as well',
+    'customize.apply_lb_tip': 'Not recommended — LiquidBounce uses blue as its brand color. Applying a different accent may look inconsistent with the LB logo.',
+    'customize.bg_orbs': 'Background Orb Color',
+    'customize.bg_orbs_tip': 'Changes the ambient glow orbs in the background.',
+
+    // Settings — tooltip hints
+    'settings.tip.ram': 'Minimum: 512 MB. Recommended: 2–4 GB for most versions. Setting it too high may actually hurt performance if your system doesn\'t have enough free RAM.',
+    'settings.tip.concurrent': 'Number of parallel download threads. More = faster downloads, but may overload slow connections or HDDs.',
+    'settings.tip.close_on_launch': 'When enabled, the launcher window hides when a game starts and reappears automatically when the game exits.',
+    'settings.tip.reset_setup': 'Wipes the setup-done flag so the setup wizard runs again on next launch. Your accounts and instances are not affected.',
+
+    // Instance errors
+    'error.prefix': 'Error:',
+    'inst.no_versions': 'No versions available.',
+    'inst.name_taken': 'An instance with this name already exists.',
+    'isettings.copy_log': 'Copy latest.log',
+    'isettings.copied': 'Copied!',
+    'reinstall.choose': 'Choose what to keep when reinstalling this instance.',
   },
 
   ru: {
@@ -168,6 +317,9 @@ const S: Record<Lang, Record<string, string>> = {
     'sw.java.error': 'Ошибка — повторим при запуске',
     'sw.java.finish': 'Запустить лаунчер',
     'sw.java.wait': 'Подождите…',
+    'sw.java.all_ready': '✓ Все среды Java готовы',
+    'sw.java.dl_progress': 'Загрузка Java… {0}%',
+    'sw.nick.warn.your_nick': 'Ваш ник:',
 
     // Features showcase
     'feat.lb': 'LiquidBounce встроен',
@@ -203,26 +355,172 @@ const S: Record<Lang, Record<string, string>> = {
     'no_instance': 'Создайте инстанс',
     'add_account': '+ Добавить аккаунт',
     'new_instance': '+ Новый инстанс',
+    'sidebar.account': 'Аккаунт',
+    'sidebar.instances': 'Инстансы',
+    'settings.language': 'Язык',
+    'sidebar.expand': 'Развернуть',
+    'sidebar.collapse': 'Свернуть',
 
     // "Other tab running"
     'running.lb': 'LiquidBounce запущен — перейди во вкладку LB чтобы остановить',
     'running.mc': 'Minecraft запущен — перейди во вкладку MC чтобы остановить',
     'busy': 'Запуск уже идёт — подождите',
 
-    // Settings
+    // Settings tabs
     'settings.title': 'Настройки',
+    'settings.tab.general': 'Основное',
+    'settings.tab.performance': 'Производительность',
+    'settings.tab.java': 'Java',
+    'settings.tab.about': 'О лаунчере',
+    'settings.tab.danger': 'Опасная зона',
+
+    // Settings — general
     'settings.game_dir': 'Директория игры',
-    'settings.ram': 'RAM',
-    'settings.concurrent': 'Параллельных загрузок',
-    'settings.java': 'Java',
-    'settings.about': 'О лаунчере',
     'settings.close_on_launch': 'Скрывать лаунчер при запуске игры',
     'settings.reset_setup': 'Сбросить мастер настройки',
     'settings.reset_setup_hint': 'При следующем запуске мастер появится снова.',
     'settings.done': 'Готово',
+
+    // Settings — performance
+    'settings.ram': 'RAM',
+    'settings.concurrent': 'Параллельных загрузок',
+
+    // Settings — java
+    'settings.java': 'Java',
     'settings.java_auto': '↓ автоскачка',
     'settings.java_found': '✓ найдена',
     'settings.java_hint': 'Отсутствующие версии скачаются автоматически при запуске.',
+
+    // Settings — about
+    'settings.about': 'О лаунчере',
+    'settings.check_updates': 'Проверить обновления',
+    'settings.checking': 'Проверяем…',
+    'settings.up_to_date': 'Обновлений нет',
+    'settings.update_available': 'доступно',
+    'settings.stack': 'Tauri v2 · Rust · React · TypeScript',
+    'settings.disclaimer': 'Этот лаунчер не является аффилированным, спонсируемым или одобренным командой LiquidBounce или CCBlueX.',
+    'settings.by': 'by vlalikoffc.',
+
+    // Settings — danger
+    'settings.danger_title': 'Опасная зона',
+    'settings.danger_hint': 'Эти действия необратимы.',
+    'settings.danger_btn': 'Удалить все данные',
+    'settings.danger_warn': '⚠ Будет удалено навсегда:',
+    'settings.danger_item1': 'Все аккаунты и токены авторизации',
+    'settings.danger_item2': 'Все инстансы и их настройки',
+    'settings.danger_item3': 'Java, скачанная лаунчером',
+    'settings.danger_item4': 'Версии Minecraft, ассеты и библиотеки',
+    'settings.danger_item5': 'Все настройки лаунчера (RAM, загрузки, параметры)',
+    'settings.danger_wait': 'Подождите {0}с перед подтверждением…',
+    'settings.danger_confirm_hint': 'Теперь можно подтвердить удаление.',
+    'settings.cancel': 'Отмена',
+    'settings.deleting': 'Удаляем…',
+    'settings.confirm_delete': 'Подтвердить удаление',
+
+    // Status hints below play button
+    'status.running': 'Запущено',
+    'status.playing_as': 'Играет',
+    'status.playing_ver': 'MC',
+
+    // Instance modal
+    'inst.modal.title_mc': 'Новый инстанс Minecraft',
+    'inst.modal.title_lb': 'Новый инстанс LiquidBounce',
+    'inst.modal.name': 'Название инстанса',
+    'inst.modal.name_ph': 'Мой инстанс',
+    'inst.modal.version': 'Версия',
+    'inst.modal.branch': 'Ветка',
+    'inst.modal.cancel': 'Отмена',
+    'inst.modal.create': 'Создать',
+    'inst.modal.filter.release': 'Релизы',
+    'inst.modal.filter.snapshot': 'Снапшоты',
+    'inst.modal.filter.old': 'Старые',
+    'inst.modal.filter.all': 'Все',
+
+    // Context menu
+    'ctx.rename': 'Переименовать',
+    'ctx.settings': 'Настройки',
+    'ctx.reinstall': 'Переустановить',
+    'ctx.delete': 'Удалить',
+
+    // Reinstall modal
+    'reinstall.title': 'Переустановить',
+    'reinstall.keep': 'Сохранить миры',
+    'reinstall.keep_desc': 'Удаляет моды, конфиги и загрузчики. Сохраняет миры, скриншоты, ресурспаки и options.txt.',
+    'reinstall.wipe': 'Полная очистка',
+    'reinstall.wipe_desc': 'Удаляет папку инстанса целиком. Все миры, моды, сохранения и настройки будут удалены безвозвратно.',
+    'reinstall.cancel': 'Отмена',
+    'reinstall.doing': 'Переустанавливаем…',
+    'reinstall.btn': 'Переустановить',
+
+    // Instance settings modal
+    'isettings.ram': 'Переопределение RAM',
+    'isettings.ram_hint': 'Оставьте пустым для глобального значения',
+    'isettings.logs': 'Логи',
+    'isettings.open_logs': 'Открыть папку с логами',
+    'isettings.no_log': 'Логов пока нет — сначала запустите инстанс.',
+    'isettings.info': 'Информация об инстансе',
+    'isettings.type_lb': 'LiquidBounce (Fabric)',
+    'isettings.type_mc': 'Vanilla Minecraft',
+
+    // Update modal
+    'update.title': 'Доступно обновление',
+    'update.no_notes': 'Описание обновления не предоставлено.',
+    'update.later': 'Позже',
+    'update.download': 'Скачать',
+    'update.downloading': 'Загрузка обновления…',
+    'update.installing': 'Установка…',
+    'update.done': 'Обновлено до',
+
+    // Add account modal
+    'acct.title': 'Добавить аккаунт',
+    'acct.offline_label': 'Оффлайн аккаунт',
+    'acct.add': 'Добавить',
+    'acct.or': 'или',
+    'acct.ms_label': 'Лицензионный аккаунт',
+    'acct.ms_btn': 'Войти через Microsoft',
+    'acct.ms_loading': 'Завершите вход в открывшемся окне…',
+    'acct.ms_note_loading': 'Завершите вход в открывшемся окне браузера',
+    'acct.ms_note': 'Требуется купленная лицензия Minecraft',
+
+    // Misc
+    'loading': 'Загрузка…',
+    'error.retry': 'Попробовать снова',
+    'launcher.subtitle': 'Minecraft Launcher by vlalikoffc',
+    'dl.paused': '⏸ Пауза',
+    'dl.resume': '▶ Продолжить',
+    'dl.pause': '⏸ Пауза',
+    'dl.cancel': '✕ Отмена',
+
+    // Performance warnings
+    'perf.warn.low': 'Мало потоков — загрузки будут медленными.',
+    'perf.warn.high': 'Много потоков — возможны проблемы на медленных соединениях.',
+
+    // Settings — game dir hint
+    'settings.game_dir_hint': 'Общие библиотеки, ассеты и Java хранятся здесь. Сохранения инстансов в папке instances/.',
+
+    // Settings — Customize tab
+    'settings.tab.customize': 'Кастомизация',
+    'customize.accent': 'Цвет акцента',
+    'customize.accent_tip': 'Изменяет цвет подсветки во всём лаунчере — кнопка запуска, бейджи, слайдеры и всё остальное.',
+    'customize.reset': 'Сбросить',
+    'customize.apply_lb': 'Применить ко вкладке LiquidBounce',
+    'customize.apply_lb_tip': 'Не рекомендуется — LiquidBounce использует синий как фирменный цвет. Другой акцент может не сочетаться с логотипом LiquidBounce.',
+    'customize.bg_orbs': 'Цвет фоновых сфер',
+    'customize.bg_orbs_tip': 'Изменяет цвет фоновых световых сфер.',
+
+    // Settings — tooltip hints
+    'settings.tip.ram': 'Минимум: 512 МБ. Рекомендуется: 2–4 ГБ для большинства версий. Слишком большое значение может ухудшить производительность, если в системе мало свободной RAM.',
+    'settings.tip.concurrent': 'Количество параллельных потоков загрузки. Больше = быстрее, но может перегрузить медленное соединение или HDD.',
+    'settings.tip.close_on_launch': 'Когда включено, лаунчер скрывается при запуске игры и появляется снова после её закрытия.',
+    'settings.tip.reset_setup': 'Сбрасывает флаг завершения настройки — мастер запустится снова при следующем открытии. Аккаунты и инстансы не затрагиваются.',
+
+    // Instance errors
+    'error.prefix': 'Ошибка:',
+    'inst.no_versions': 'Версий нет.',
+    'inst.name_taken': 'Инстанс с таким именем уже существует.',
+    'isettings.copy_log': 'Скопировать latest.log',
+    'isettings.copied': 'Скопировано!',
+    'reinstall.choose': 'Выберите, что сохранить при переустановке инстанса.',
   },
 }
 

@@ -258,11 +258,11 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
                     <div className="sw-lang-hint">{t('sw.welcome.choose')}</div>
                     <div className="sw-lang-row">
                       <button className={`sw-lang-btn${lang === 'en' ? ' sw-lang-active' : ''}`} onClick={() => setLang('en')}>
-                        <span className="sw-lang-badge sw-lang-en">EN</span>
+                        <span className="sw-lang-badge sw-lang-en">🇬🇧</span>
                         <span>English</span>
                       </button>
                       <button className={`sw-lang-btn${lang === 'ru' ? ' sw-lang-active' : ''}`} onClick={() => setLang('ru')}>
-                        <span className="sw-lang-badge sw-lang-ru">RU</span>
+                        <span className="sw-lang-badge sw-lang-ru">🇷🇺</span>
                         <span>Русский</span>
                       </button>
                     </div>
@@ -356,7 +356,7 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
                     </div>
                     <div className="sw-step-title" style={{ marginTop: 20 }}>Microsoft</div>
                     <div className="sw-step-sub" style={{ marginTop: 8 }}>
-                      {lang === 'ru' ? 'Завершите вход в открывшемся окне…' : 'Complete sign-in in the popup window…'}
+                      {t('acct.ms_loading')}
                     </div>
                     <div className="sw-ms-spinner-wrap">
                       <span className="ms-spinner" style={{ width: 24, height: 24, borderWidth: 3 }} />
@@ -432,7 +432,7 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
                       <p>{t('sw.nick.warn.body')}</p>
                       <div className="sw-nick-example-box">
                         <div className="sw-nick-example-chosen">
-                          <span className="sw-nick-example-lbl">{lang === 'ru' ? 'Ваш ник:' : 'Your username:'}</span>
+                          <span className="sw-nick-example-lbl">{t('sw.nick.warn.your_nick')}</span>
                           <span className="sw-nick-example-val">{nickForWarn}</span>
                         </div>
                         <div className="sw-nick-tips">{t('sw.nick.warn.tips')}</div>
@@ -501,10 +501,8 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
             <div className="sw-java-dl-strip">
               <div className="sw-java-dl-label">
                 {javaAllDone
-                  ? (lang === 'ru' ? '✓ Все среды Java готовы' : '✓ All Java runtimes ready')
-                  : (lang === 'ru'
-                      ? `Загрузка Java… ${overallJavaProgress}%`
-                      : `Downloading Java… ${overallJavaProgress}%`)
+                  ? t('sw.java.all_ready')
+                  : t('sw.java.dl_progress').replace('{0}', String(overallJavaProgress))
                 }
               </div>
               <div className="sw-java-dl-track">

@@ -1322,41 +1322,56 @@ pub async fn ensure_java(
     shared_dir: &PathBuf,
     req: Option<&JavaVersionReq>,
 ) -> Result<PathBuf> {
+    let major = req.map(|r| r.major_version).unwrap_or(21);
+    let exe   = if cfg!(windows) { "javaw.exe" } else { "java" };
+
+    progress(app, "launch", 88.0, &format!("Java {major}: scanning local installs (shared_dir={})…", shared_dir.display()));
     if let Some(java) = find_java(shared_dir, req).or_else(|| find_java(&mc_dir(), req)) {
+        progress(app, "launch", 88.5, &format!("Java {major}: found at {}", java.display()));
         return Ok(java);
     }
 
-    let major = req.map(|r| r.major_version).unwrap_or(21);
-    let exe   = if cfg!(windows) { "javaw.exe" } else { "java" };
     let java_dir = shared_dir.join("java").join(format!("jre-{major}"));
+    progress(app, "launch", 88.5, &format!("Java {major}: not found locally, checking {}", java_dir.display()));
 
     // Already extracted from a previous download?
     if java_dir.exists() {
+        progress(app, "launch", 88.5, &format!("Java {major}: dir exists, scanning for {exe}…"));
         if let Some(found) = find_java_exe_recursive(&java_dir, exe) {
             return Ok(found);
         }
+        progress(app, "launch", 88.5, &format!("Java {major}: dir exists but no {exe} found inside"));
     }
 
-    // Auto-download Eclipse Temurin JRE via assets JSON API (avoids redirect-chain failures)
-    progress(app, "download", 88.0, &format!("Downloading Java {major}…"));
+    // Auto-download Eclipse Temurin JRE via Adoptium v3 feature_releases API
+    // Note: /assets/latest/ is broken (404); /assets/feature_releases/ works and uses binaries[] array
     let os_str   = if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "mac" } else { "linux" };
-    let arch_str = if cfg!(target_pointer_width = "64") { "x64" } else { "x32" };
+    let arch_str = match std::env::consts::ARCH { "x86_64" => "x64", "aarch64" => "aarch64", _ => "x86" };
     let assets_url = format!(
-        "https://api.adoptium.net/v3/assets/latest/{major}/ga?architecture={arch_str}&heap_size=normal&image_type=jre&os={os_str}&vendor=eclipse"
+        "https://api.adoptium.net/v3/assets/feature_releases/{major}/ga?architecture={arch_str}&heap_size=normal&image_type=jre&os={os_str}&vendor=eclipse&page_size=1"
     );
-    let assets_json: serde_json::Value = client
+    progress(app, "download", 88.0, &format!("Java {major}: querying Adoptium (os={os_str} arch={arch_str})…"));
+
+    let api_resp = client
         .get(&assets_url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
         .send().await
-        .context("Cannot reach Adoptium API (adoptium.net)")?
-        .json().await
-        .context("Adoptium assets JSON parse failed")?;
+        .context("Cannot reach Adoptium API (adoptium.net)")?;
+    let api_status = api_resp.status();
+    let assets_json: serde_json::Value = api_resp.json().await
+        .with_context(|| format!("Adoptium assets JSON parse failed (HTTP {api_status}, url={assets_url})"))?;
+
+    progress(app, "download", 88.2, &format!("Java {major}: Adoptium replied HTTP {api_status}, entries={}", assets_json.as_array().map(|a| a.len()).unwrap_or(0)));
+
     let direct_url = assets_json[0]["binaries"][0]["package"]["link"]
         .as_str()
         .ok_or_else(|| anyhow!(
-            "Java {major} not found in Adoptium catalog — install manually: https://adoptium.net"
+            "Java {major} not found in Adoptium catalog (HTTP {api_status}, entries={}, url={assets_url}) — install manually: https://adoptium.net",
+            assets_json.as_array().map(|a| a.len()).unwrap_or(0)
         ))?
         .to_string();
+
+    progress(app, "download", 88.3, &format!("Java {major}: got CDN url, downloading…"));
 
     let resp = client.get(&direct_url)
         .header("User-Agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
@@ -1451,9 +1466,10 @@ pub async fn download_java_major(app: &tauri::AppHandle, major: u32) -> Result<(
         .context("reqwest build")?;
 
     let os_str   = if cfg!(windows) { "windows" } else if cfg!(target_os = "macos") { "mac" } else { "linux" };
-    let arch_str = if cfg!(target_pointer_width = "64") { "x64" } else { "x32" };
+    let arch_str = match std::env::consts::ARCH { "x86_64" => "x64", "aarch64" => "aarch64", _ => "x86" };
+    // /assets/latest/ is broken (404 for all versions); use /assets/feature_releases/ instead
     let assets_url = format!(
-        "https://api.adoptium.net/v3/assets/latest/{major}/ga?architecture={arch_str}&heap_size=normal&image_type=jre&os={os_str}&vendor=eclipse"
+        "https://api.adoptium.net/v3/assets/feature_releases/{major}/ga?architecture={arch_str}&heap_size=normal&image_type=jre&os={os_str}&vendor=eclipse&page_size=1"
     );
 
     let assets_json: serde_json::Value = client
@@ -1466,7 +1482,7 @@ pub async fn download_java_major(app: &tauri::AppHandle, major: u32) -> Result<(
 
     let direct_url = assets_json[0]["binaries"][0]["package"]["link"]
         .as_str()
-        .ok_or_else(|| anyhow!("Java {major} not found in Adoptium catalog"))?
+        .ok_or_else(|| anyhow!("Java {major} not found in Adoptium catalog (os={os_str} arch={arch_str})"))?
         .to_string();
 
     let resp = client.get(&direct_url)
