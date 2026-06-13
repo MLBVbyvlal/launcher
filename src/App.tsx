@@ -1193,12 +1193,15 @@ export default function App() {
         initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ duration: 0.4, ease: 'easeOut' }}
       >
         {/* ── TITLEBAR ── */}
-        <div className="titlebar">
-          <div className="titlebar-left" data-tauri-drag-region>
+        <div className="titlebar" onMouseDown={e => {
+          if (!(e.target as HTMLElement).closest('button,input,a,[role="button"]'))
+            getCurrentWindow().startDragging().catch(() => {})
+        }}>
+          <div className="titlebar-left">
             <div className="logo-mark"><span /><span /><span /><span /></div>
             <span className="titlebar-name">MLBV</span>
           </div>
-          <div className="titlebar-drag" data-tauri-drag-region />
+          <div className="titlebar-drag" />
           <div className="win-controls">
             <button className="wc min" onClick={winControls.minimize}><span className="wc-icon">−</span></button>
             <button className="wc max" onClick={winControls.maximize}><span className="wc-icon">⊡</span></button>
