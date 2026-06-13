@@ -1198,10 +1198,10 @@ export default function App() {
             <div className="logo-mark"><span /><span /><span /><span /></div>
             <span className="titlebar-name">MLBV</span>
           </div>
-          <div className="win-controls">
-            <button className="wc min" onClick={winControls.minimize}><span className="wc-icon">−</span></button>
-            <button className="wc max" onClick={winControls.maximize}><span className="wc-icon">⊡</span></button>
-            <button className="wc cls" onClick={winControls.close}><span className="wc-icon">✕</span></button>
+          <div className="win-controls" onMouseDown={e => e.stopPropagation()}>
+            <button className="wc min" onMouseDown={e => e.stopPropagation()} onClick={winControls.minimize}><span className="wc-icon">−</span></button>
+            <button className="wc max" onMouseDown={e => e.stopPropagation()} onClick={winControls.maximize}><span className="wc-icon">⊡</span></button>
+            <button className="wc cls" onMouseDown={e => e.stopPropagation()} onClick={winControls.close}><span className="wc-icon">✕</span></button>
           </div>
         </div>
 
