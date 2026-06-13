@@ -260,6 +260,27 @@ const S: Record<Lang, Record<string, string>> = {
     'isettings.copy_log': 'Copy latest.log',
     'isettings.copied': 'Copied!',
     'reinstall.choose': 'Choose what to keep when reinstalling this instance.',
+
+    // Console toggle
+    'settings.console': 'Console Window',
+    'settings.console_hint': 'Show live log window when game starts',
+
+    // Mod loader picker
+    'inst.loader.title': 'Mod Loader',
+    'inst.loader.next': 'Next',
+    'inst.loader.vanilla': 'Vanilla',
+    'inst.loader.fabric': 'Fabric',
+    'inst.loader.vanilla_desc': 'No mods, pure Minecraft',
+    'inst.loader.fabric_desc': 'Includes Fabric API from Modrinth',
+    'inst.loader.soon': 'Coming soon',
+
+    // Console window
+    'console.title': 'Console',
+    'console.copy': 'Copy Log',
+    'console.open_folder': 'Open Log Folder',
+    'console.empty': 'Waiting for game output…',
+    'console.lines': 'lines',
+    'console.clear': 'Clear',
   },
 
   ru: {
@@ -521,6 +542,27 @@ const S: Record<Lang, Record<string, string>> = {
     'isettings.copy_log': 'Скопировать latest.log',
     'isettings.copied': 'Скопировано!',
     'reinstall.choose': 'Выберите, что сохранить при переустановке инстанса.',
+
+    // Console toggle
+    'settings.console': 'Окно консоли',
+    'settings.console_hint': 'Показывать окно логов при запуске игры',
+
+    // Mod loader picker
+    'inst.loader.title': 'Загрузчик модов',
+    'inst.loader.next': 'Далее',
+    'inst.loader.vanilla': 'Ванилла',
+    'inst.loader.fabric': 'Fabric',
+    'inst.loader.vanilla_desc': 'Без модов, чистый Minecraft',
+    'inst.loader.fabric_desc': 'Включает Fabric API с Modrinth',
+    'inst.loader.soon': 'Скоро',
+
+    // Console window
+    'console.title': 'Консоль',
+    'console.copy': 'Скопировать лог',
+    'console.open_folder': 'Папка с логом',
+    'console.empty': 'Ожидание вывода игры…',
+    'console.lines': 'строк',
+    'console.clear': 'Очистить',
   },
 }
 

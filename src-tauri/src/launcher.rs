@@ -937,6 +937,319 @@ pub async fn run_lb(
     Ok(())
 }
 
+// ─── Fabric (vanilla + Fabric Loader + Fabric API from Modrinth) ─────────────
+
+pub async fn run_fabric(
+    app: tauri::AppHandle,
+    mc_version: String,
+    instance_name: String,
+    username: String,
+    uuid: String,
+    offline: bool,
+    access_token: String,
+    concurrent_downloads: u32,
+    max_ram_mb: u32,
+) -> Result<()> {
+    let shared_dir = shared_data_dir();
+    let game_dir   = instances_dir().join(&instance_name);
+    let mods_dir   = game_dir.join("mods");
+    fs::create_dir_all(&shared_dir)?;
+    fs::create_dir_all(&game_dir)?;
+    fs::create_dir_all(&mods_dir)?;
+
+    let client = reqwest::Client::builder().user_agent("MLBV/1.0").build()?;
+
+    let state = app.state::<GameState>();
+    let cancel_dl = state.cancel_dl.clone();
+    let pause_dl  = state.pause_dl.clone();
+    let dl_bytes  = state.dl_bytes.clone();
+    cancel_dl.store(false, Ordering::Relaxed);
+    pause_dl.store(false, Ordering::Relaxed);
+    dl_bytes.store(0, Ordering::Relaxed);
+
+    let _speed_guard = {
+        let b = dl_bytes.clone();
+        let a = app.clone();
+        let h = tokio::spawn(async move {
+            let mut last = 0u64;
+            loop {
+                tokio::time::sleep(tokio::time::Duration::from_secs(1)).await;
+                let cur = b.load(Ordering::Relaxed);
+                let bps = cur.saturating_sub(last);
+                last = cur;
+                let _ = a.emit("download-speed", serde_json::json!({ "bps": bps }));
+            }
+        });
+        AbortOnDrop(h)
+    };
+
+    // 1. Resolve latest stable Fabric Loader version for this MC version
+    progress(&app, "fetch", 5.0, "Fetching Fabric Loader version…");
+    let loader_list: serde_json::Value = client
+        .get(format!("https://meta.fabricmc.net/v2/versions/loader/{}", mc_version))
+        .send().await.context("Cannot reach FabricMC API")?
+        .json().await?;
+    let loader_ver = loader_list.as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|e| e["loader"]["stable"].as_bool().unwrap_or(false))
+                .or_else(|| arr.first())
+        })
+        .and_then(|e| e["loader"]["version"].as_str())
+        .ok_or_else(|| anyhow!("No Fabric Loader found for MC {}", mc_version))?
+        .to_string();
+
+    // 2. Download vanilla MC
+    progress(&app, "fetch", 10.0, "Setting up vanilla Minecraft…");
+    let mc_ver = mc_version.clone();
+    let mf: VersionManifest = client
+        .get("https://launchermeta.mojang.com/mc/game/version_manifest_v2.json")
+        .send().await?.json().await?;
+    let entry = mf.versions.iter().find(|v| v.id == mc_ver)
+        .ok_or_else(|| anyhow!("MC version {} not found", mc_ver))?;
+    let ver_text = client.get(&entry.url).send().await?.text().await?;
+    let ver: VersionJson = serde_json::from_str(&ver_text)?;
+
+    let ver_dir = shared_dir.join("versions").join(&mc_ver);
+    fs::create_dir_all(&ver_dir)?;
+    let ver_json_path = ver_dir.join(format!("{mc_ver}.json"));
+    if !ver_json_path.exists() { fs::write(&ver_json_path, &ver_text)?; }
+
+    let jar_path = ver_dir.join(format!("{mc_ver}.jar"));
+    if !is_valid_file(&jar_path, ver.downloads.client.size) {
+        progress(&app, "download", 14.0, "Downloading Minecraft client…");
+        download_file(&client, &ver.downloads.client.url, &jar_path).await?;
+    }
+
+    // 3. Vanilla libraries
+    let libs_dir     = shared_dir.join("libraries");
+    let natives_dir  = ver_dir.join("natives");
+    fs::create_dir_all(&natives_dir)?;
+    let mut classpath: Vec<String> = Vec::new();
+    let total = ver.libraries.len();
+    for (i, lib) in ver.libraries.iter().enumerate() {
+        if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
+        while pause_dl.load(Ordering::Relaxed) {
+            if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+        }
+        if i % 10 == 0 {
+            let pct = 16.0 + (i as f32 / total as f32) * 22.0;
+            progress(&app, "download", pct, &format!("Vanilla libraries ({i}/{total})…"));
+        }
+        if !lib_allowed(lib) { continue; }
+        let Some(dl) = &lib.downloads else { continue };
+        if let Some(art) = &dl.artifact {
+            let p = libs_dir.join(&art.path);
+            fs::create_dir_all(p.parent().unwrap())?;
+            if !is_valid_file(&p, art.size) { let _ = download_file(&client, &art.url, &p).await; }
+            classpath.push(p.to_string_lossy().into_owned());
+        }
+        if let Some(natives_map) = &lib.natives {
+            let key = os_classifier_key();
+            if let Some(classifier) = natives_map.get(key) {
+                let classifier = classifier.replace("${arch}", arch_bits());
+                if let Some(classifiers) = &dl.classifiers {
+                    if let Some(nat) = classifiers.get(&classifier) {
+                        let p = libs_dir.join(&nat.path);
+                        fs::create_dir_all(p.parent().unwrap())?;
+                        if !is_valid_file(&p, nat.size) { let _ = download_file(&client, &nat.url, &p).await; }
+                        let _ = extract_natives(&p, &natives_dir);
+                    }
+                }
+            }
+        }
+    }
+
+    // 4. Assets
+    progress(&app, "download", 40.0, "Downloading asset index…");
+    let idx_dir = shared_dir.join("assets").join("indexes");
+    fs::create_dir_all(&idx_dir)?;
+    let idx_path = idx_dir.join(format!("{}.json", ver.asset_index.id));
+    if !idx_path.exists() {
+        let t = client.get(&ver.asset_index.url).send().await?.text().await?;
+        fs::write(&idx_path, &t)?;
+    }
+    let idx: AssetIndex = serde_json::from_str(&fs::read_to_string(&idx_path)?)?;
+    let objs_dir  = shared_dir.join("assets").join("objects");
+    let total_a   = idx.objects.len();
+    progress(&app, "download", 42.0, &format!("Assets (0/{total_a})…"));
+    download_assets_parallel(&app, &client, &idx.objects, &objs_dir, concurrent_downloads, 42.0, 20.0,
+        cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone()).await;
+    if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
+    progress(&app, "download", 62.0, &format!("Assets ({total_a}/{total_a})…"));
+
+    // 5. Fabric Loader profile + libraries
+    progress(&app, "download", 63.0, "Fetching Fabric Loader profile…");
+    let fabric_url = format!(
+        "https://meta.fabricmc.net/v2/versions/loader/{}/{}/profile/json",
+        mc_ver, loader_ver
+    );
+    let fabric_text = client.get(&fabric_url).send().await?.text().await?;
+    let fabric: FabricProfile = serde_json::from_str(&fabric_text)
+        .map_err(|e| anyhow!("Fabric profile parse: {e}"))?;
+
+    let total_fl = fabric.libraries.len();
+    for (i, flib) in fabric.libraries.iter().enumerate() {
+        if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
+        while pause_dl.load(Ordering::Relaxed) {
+            if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
+            tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+        }
+        if i % 5 == 0 {
+            let pct = 65.0 + (i as f32 / total_fl.max(1) as f32) * 10.0;
+            progress(&app, "download", pct, &format!("Fabric libraries ({i}/{total_fl})…"));
+        }
+        let parts: Vec<&str> = flib.name.splitn(3, ':').collect();
+        if parts.len() < 3 { continue; }
+        let (group, artifact, version) = (parts[0], parts[1], parts[2]);
+        let group_path = group.replace('.', "/");
+        let jar_name   = format!("{artifact}-{version}.jar");
+        let rel_path   = format!("{group_path}/{artifact}/{version}/{jar_name}");
+        let dest       = libs_dir.join(&rel_path);
+        if !dest.exists() {
+            fs::create_dir_all(dest.parent().unwrap())?;
+            let url = format!("{}/{rel_path}", flib.url.trim_end_matches('/'));
+            let _ = download_file(&client, &url, &dest).await;
+        }
+        classpath.push(dest.to_string_lossy().into_owned());
+    }
+
+    // 6. Download Fabric API from Modrinth (project P7dR8mSH)
+    progress(&app, "download", 76.0, "Downloading Fabric API from Modrinth…");
+    let modrinth_url = format!(
+        "https://api.modrinth.com/v2/project/P7dR8mSH/version?game_versions=[\"{mc_ver}\"]&loaders=[\"fabric\"]"
+    );
+    let versions_resp: serde_json::Value = client
+        .get(&modrinth_url)
+        .header("User-Agent", "MLBV/1.0 (github.com/MLBVbyvlalikoffc/launcher)")
+        .send().await
+        .context("Cannot reach Modrinth API")?
+        .json().await?;
+
+    if let Some(first_ver) = versions_resp.as_array().and_then(|a| a.first()) {
+        if let Some(files) = first_ver["files"].as_array() {
+            let jar_file = files.iter().find(|f| {
+                f["filename"].as_str().map(|n| n.ends_with(".jar") && !n.contains("-sources")).unwrap_or(false)
+            });
+            if let Some(f) = jar_file {
+                if let (Some(url), Some(name)) = (f["url"].as_str(), f["filename"].as_str()) {
+                    let dest = mods_dir.join(name);
+                    if !is_valid_file(&dest, 0) {
+                        let _ = download_file(&client, url, &dest).await;
+                    }
+                }
+            }
+        }
+    }
+
+    // MC jar at end of classpath
+    classpath.push(jar_path.to_string_lossy().into_owned());
+
+    // 7. Java
+    progress(&app, "launch", 92.0, "Finding Java runtime…");
+    let java = ensure_java(&app, &client, &shared_dir, ver.java_version.as_ref()).await
+        .context("Failed to obtain Java runtime")?;
+
+    // 8. Build command
+    progress(&app, "launch", 95.0, "Starting Minecraft (Fabric)…");
+    let sep = if cfg!(windows) { ";" } else { ":" };
+    let classpath_str = classpath.join(sep);
+    let token     = if offline { "0".to_string() } else { access_token };
+    let user_type = if offline { "offline" } else { "msa" };
+
+    let vars: HashMap<&str, String> = HashMap::from([
+        ("${auth_player_name}", username.clone()),
+        ("${version_name}", format!("fabric-loader-{loader_ver}-{mc_ver}")),
+        ("${game_directory}", game_dir.to_string_lossy().into_owned()),
+        ("${assets_root}", shared_dir.join("assets").to_string_lossy().into_owned()),
+        ("${assets_index_name}", ver.asset_index.id.clone()),
+        ("${auth_uuid}", uuid.clone()),
+        ("${auth_access_token}", token),
+        ("${user_type}", user_type.to_string()),
+        ("${version_type}", "release".to_string()),
+        ("${user_properties}", "{}".to_string()),
+        ("${natives_directory}", natives_dir.to_string_lossy().into_owned()),
+        ("${launcher_name}", "MLBV".to_string()),
+        ("${launcher_version}", "1.0".to_string()),
+        ("${classpath}", classpath_str.clone()),
+        ("${classpath_separator}", sep.to_string()),
+        ("${resolution_width}", "854".to_string()),
+        ("${resolution_height}", "480".to_string()),
+    ]);
+    let replace = |s: &str| -> String {
+        let mut out = s.to_string();
+        for (k, v) in &vars { out = out.replace(k, v); }
+        out
+    };
+
+    let mut cmd_args: Vec<String> = Vec::new();
+    if let Some(fa) = &fabric.arguments {
+        for v in &fa.jvm { if let Some(s) = v.as_str() { cmd_args.push(replace(s)); } }
+    }
+    if let Some(new_args) = &ver.arguments {
+        for arg in &new_args.jvm { resolve_arg(arg, &replace, &mut cmd_args); }
+    } else {
+        cmd_args.push(format!("-Djava.library.path={}", natives_dir.display()));
+        cmd_args.push("-Dminecraft.launcher.brand=MLBV".to_string());
+        cmd_args.push("-cp".to_string());
+        cmd_args.push(classpath_str);
+    }
+    cmd_args.push(format!("-Xmx{}m", max_ram_mb));
+    cmd_args.push("-Xms256m".to_string());
+    cmd_args.push(fabric.main_class.clone());
+    if let Some(new_args) = &ver.arguments {
+        for arg in &new_args.game { resolve_arg(arg, &replace, &mut cmd_args); }
+    } else if let Some(old) = &ver.minecraft_arguments {
+        for part in old.split_whitespace() { cmd_args.push(replace(part)); }
+    }
+
+    let child = std::process::Command::new(&java)
+        .args(&cmd_args)
+        .current_dir(&game_dir)
+        .spawn()
+        .with_context(|| format!("Failed to start Java from {:?}", java))?;
+
+    progress(&app, "launch", 100.0, "Minecraft (Fabric) launched!");
+
+    *app.state::<GameState>().child.lock().unwrap() = Some(child);
+    let _ = app.emit("game-running", true);
+
+    let app_mon     = app.clone();
+    let game_dir_mon = game_dir.clone();
+    std::thread::spawn(move || {
+        loop {
+            std::thread::sleep(std::time::Duration::from_secs(1));
+            let state = app_mon.state::<GameState>();
+            let mut guard = state.child.lock().unwrap();
+            match guard.as_mut() {
+                Some(c) => { if let Ok(Some(status)) = c.try_wait() {
+                    *guard = None; drop(guard);
+                    if !status.success() {
+                        let log_path = game_dir_mon.join("logs").join("latest.log");
+                        let log_tail = std::fs::read_to_string(&log_path)
+                            .map(|s| {
+                                let v: Vec<&str> = s.lines().collect();
+                                v[v.len().saturating_sub(80)..].join("\n")
+                            })
+                            .unwrap_or_else(|_| "No log file found.".into());
+                        let _ = app_mon.emit("game-crashed", serde_json::json!({
+                            "exitCode": status.code().unwrap_or(-1),
+                            "log": log_tail,
+                            "logPath": log_path.to_string_lossy().into_owned(),
+                        }));
+                    }
+                    let _ = app_mon.emit("game-running", false);
+                    break;
+                }}
+                None => break,
+            }
+        }
+    });
+
+    Ok(())
+}
+
 // ─── LB mod WebView download ──────────────────────────────────────────────────
 
 /// Open the LiquidBounce download-queue page in a popup.

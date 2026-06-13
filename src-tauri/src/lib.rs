@@ -550,16 +550,126 @@ async fn reset_all_data() -> Result<(), String> {
     Ok(())
 }
 
+// ── Console window support ────────────────────────────────────────────────────
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct ConsoleInfo {
+    instance_name: String,
+    log_path: String,
+}
+
+struct ConsoleState {
+    info: std::sync::Mutex<Option<ConsoleInfo>>,
+}
+
+#[tauri::command]
+fn get_window_type(window: tauri::WebviewWindow) -> String {
+    if window.label() == "console" { "console".to_string() } else { "main".to_string() }
+}
+
+#[tauri::command]
+async fn open_console_window(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
+    let log_path = launcher::mlbv_base()
+        .join("instances")
+        .join(&instance_name)
+        .join("logs")
+        .join("latest.log")
+        .to_string_lossy()
+        .into_owned();
+
+    *app.state::<ConsoleState>().info.lock().unwrap() = Some(ConsoleInfo {
+        instance_name: instance_name.clone(),
+        log_path,
+    });
+
+    // Close existing console window if open
+    if let Some(win) = app.get_webview_window("console") {
+        let _ = win.close();
+        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+    }
+
+    tauri::WebviewWindowBuilder::new(
+        &app, "console",
+        tauri::WebviewUrl::App("index.html".into()),
+    )
+    .title(format!("MLBV Console — {instance_name}"))
+    .inner_size(820.0, 580.0)
+    .min_inner_size(600.0, 400.0)
+    .decorations(false)
+    .center()
+    .build()
+    .map_err(|e| format!("Console window: {e}"))?;
+
+    Ok(())
+}
+
+#[tauri::command]
+fn get_console_info(app: tauri::AppHandle) -> Option<ConsoleInfo> {
+    app.state::<ConsoleState>().info.lock().unwrap().clone()
+}
+
+#[derive(serde::Serialize)]
+struct PollResult {
+    lines: Vec<String>,
+    new_offset: u64,
+}
+
+#[tauri::command]
+fn poll_console(log_path: String, offset: u64) -> PollResult {
+    use std::io::{Read, Seek, SeekFrom};
+    let path = std::path::Path::new(&log_path);
+    if !path.exists() {
+        return PollResult { lines: vec![], new_offset: offset };
+    }
+    let mut file = match std::fs::File::open(path) {
+        Ok(f) => f,
+        Err(_) => return PollResult { lines: vec![], new_offset: offset },
+    };
+    let file_size = match file.metadata() {
+        Ok(m) => m.len(),
+        Err(_) => return PollResult { lines: vec![], new_offset: offset },
+    };
+    if file_size <= offset {
+        return PollResult { lines: vec![], new_offset: offset };
+    }
+    let _ = file.seek(SeekFrom::Start(offset));
+    let mut content = String::new();
+    let _ = file.read_to_string(&mut content);
+    let new_offset = file.seek(SeekFrom::Current(0)).unwrap_or(file_size);
+    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
+    PollResult { lines, new_offset }
+}
+
+#[tauri::command]
+async fn launch_fabric_game(
+    app: tauri::AppHandle,
+    version_id: String,
+    instance_name: String,
+    username: String,
+    uuid: String,
+    offline: bool,
+    access_token: String,
+    concurrent_downloads: u32,
+    max_ram_mb: u32,
+) -> Result<(), String> {
+    launcher::run_fabric(
+        app, version_id, instance_name, username, uuid, offline, access_token,
+        concurrent_downloads, max_ram_mb,
+    ).await.map_err(|e| e.to_string())
+}
+
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(launcher::GameState::new())
+        .manage(ConsoleState { info: std::sync::Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
             check_version_installed,
             get_game_dir,
             launch_game,
             launch_lb_game,
+            launch_fabric_game,
             get_lb_branches,
             get_lb_versions,
             microsoft_login,
@@ -578,6 +688,10 @@ pub fn run() {
             get_just_updated,
             open_url,
             get_debug_info,
+            get_window_type,
+            open_console_window,
+            get_console_info,
+            poll_console,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

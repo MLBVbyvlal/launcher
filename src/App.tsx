@@ -14,7 +14,7 @@ import './App.css'
 type Account   = { type: 'offline' | 'microsoft'; username: string; uuid: string; accessToken?: string }
 type MCVersion = { id: string; type: 'release' | 'snapshot' | 'old_alpha' | 'old_beta'; releaseTime: string }
 type LBVersion = { tag: string; mcVersion: string; date: string; buildId?: number }
-type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number }
+type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number; loader?: 'vanilla' | 'fabric' }
 type VFilter    = 'release' | 'snapshot' | 'old' | 'all'
 type AppState   = 'loading' | 'ready' | 'error'
 type Tab        = 'mc' | 'lb'
@@ -70,6 +70,7 @@ function applyAccent(hex: string, applyToLb = false) {
   root.setProperty('--accent-dark', dark)
   root.setProperty('--accent-glow', glow)
   root.setProperty('--on-accent', onAccent)
+  root.setProperty('--accent-rgb', `${r} ${g} ${b}`)
   if (applyToLb) {
     root.setProperty('--lb-accent', hex)
     root.setProperty('--lb-accent-dark', dark)
@@ -171,6 +172,7 @@ function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangC
   const [concurrent, setConcurrent]         = useState(() => { const s = localStorage.getItem('mlbv_concurrent'); return s ? Number(s) : 5 })
   const [concurrentDraft, setConcurrentDraft] = useState<string | null>(null)
   const [closeOnLaunch, setCloseOnLaunch]   = useState(() => localStorage.getItem('mlbv_close_on_launch') === '1')
+  const [consoleEnabled, setConsoleEnabled] = useState(() => localStorage.getItem('mlbv_console_enabled') === '1')
   const [javaInstalls, setJavaInstalls]     = useState<{ major: number; path: string }[]>([])
   const [dangerOpen, setDangerOpen]         = useState(false)
   const [countdown, setCountdown]           = useState(5)
@@ -216,6 +218,7 @@ function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangC
   useEffect(() => { localStorage.setItem('mlbv_ram', String(ram)) }, [ram])
   useEffect(() => { localStorage.setItem('mlbv_concurrent', String(concurrent)) }, [concurrent])
   useEffect(() => { localStorage.setItem('mlbv_close_on_launch', closeOnLaunch ? '1' : '0') }, [closeOnLaunch])
+  useEffect(() => { localStorage.setItem('mlbv_console_enabled', consoleEnabled ? '1' : '0') }, [consoleEnabled])
 
   useEffect(() => {
     if (!dangerOpen || countdown <= 0) return
@@ -349,6 +352,16 @@ function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangC
                     </div>
                   </div>
                   <div className="setting-group">
+                    <div className="setting-label-row">
+                      <label className="setting-toggle" style={{ flex: 1 }}>
+                        <input type="checkbox" checked={consoleEnabled} onChange={e => setConsoleEnabled(e.target.checked)} />
+                        <span className="toggle-track"><span className="toggle-thumb" /></span>
+                        <span className="toggle-label">{t('settings.console')}</span>
+                      </label>
+                      <Tip text={t('settings.console_hint')} />
+                    </div>
+                  </div>
+                  <div className="setting-group">
                     <div className="setting-label">{t('settings.reset_setup')}</div>
                     <button className="btn-secondary" onClick={() => {
                       localStorage.removeItem('mlbv_setup_done')
@@ -460,7 +473,7 @@ function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangC
                     </div>
                     <p className="about-disclaimer">{t('settings.disclaimer')}</p>
                     <div className="about-info">
-                      <span className="about-ver">MLBV v0.0.2</span>
+                      <span className="about-ver">MLBV v{__APP_VERSION__}</span>
                       <span className="about-stack">{t('settings.stack')}</span>
                     </div>
                     <div className="about-update-row">
@@ -594,13 +607,15 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   onAdd: (inst: Instance) => void
   onClose: () => void
 }) {
-  const [instType, setInstType] = useState<Tab>(defaultTab)
-  const [vFilter, setVFilter]   = useState<VFilter>('release')
-  const [selVer, setSelVer]     = useState<string>('')
-  const [name, setName]         = useState('')
-  const [nameEdited, setNameEdited] = useState(false)
-  const [shake, setShake]       = useState(false)
-  const [error, setError]       = useState('')
+  const [instType, setInstType]       = useState<Tab>(defaultTab)
+  const [step, setStep]               = useState<1 | 2>(1)
+  const [selectedLoader, setSelectedLoader] = useState<'vanilla' | 'fabric'>('vanilla')
+  const [vFilter, setVFilter]         = useState<VFilter>('release')
+  const [selVer, setSelVer]           = useState<string>('')
+  const [name, setName]               = useState('')
+  const [nameEdited, setNameEdited]   = useState(false)
+  const [shake, setShake]             = useState(false)
+  const [error, setError]             = useState('')
 
   // LB branch state
   const t = useT(getLang())
@@ -649,6 +664,9 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
     if (instType === 'lb') loadBranchVersions(lbBranch)
   }, [instType, lbBranch, loadBranchVersions])
 
+  // Reset step when switching to LB type
+  useEffect(() => { if (instType === 'lb') setStep(1) }, [instType])
+
   // Auto-pick first version when type/branch changes
   useEffect(() => {
     if (instType === 'mc') {
@@ -669,7 +687,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   }, [currentLbVersions.length, instType]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const autoName = instType === 'mc'
-    ? `Minecraft ${selVer}`
+    ? (selectedLoader === 'fabric' ? `Minecraft ${selVer} (Fabric)` : `Minecraft ${selVer}`)
     : `LiquidBounce ${selVer}`
 
   const displayName = nameEdited ? name : autoName
@@ -699,6 +717,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
       version: selVer,
       mcVersion: mcVer,
       buildId: lbBuild?.buildId,
+      loader: instType === 'mc' ? selectedLoader : undefined,
     })
     onClose()
   }
@@ -724,6 +743,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
         </div>
 
         {instType === 'mc' ? (
+          step === 1 ? (
           <>
             <div className="vtabs" style={{ padding: '8px 16px 0', gap: 4, display: 'flex' }}>
               {(['release','snapshot','old','all'] as VFilter[]).map(f => (
@@ -747,6 +767,40 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
               ))}
             </div>
           </>
+          ) : (
+          <>
+            <div className="loader-grid">
+              {([
+                { id: 'vanilla', icon: '🌿', label: t('inst.loader.vanilla'), desc: t('inst.loader.vanilla_desc'), enabled: true },
+                { id: 'fabric',  icon: '🧵', label: t('inst.loader.fabric'),  desc: t('inst.loader.fabric_desc'),  enabled: true },
+                { id: 'forge',   icon: '⚒️', label: 'Forge',   desc: t('inst.loader.soon'), enabled: false },
+                { id: 'neoforge',icon: '🔥', label: 'NeoForge',desc: t('inst.loader.soon'), enabled: false },
+              ] as const).map(opt => (
+                <div key={opt.id}
+                  className={[
+                    'loader-opt',
+                    !opt.enabled ? 'loader-disabled' : '',
+                    opt.enabled && selectedLoader === opt.id ? 'loader-selected' : '',
+                  ].filter(Boolean).join(' ')}
+                  onClick={() => opt.enabled && setSelectedLoader(opt.id as 'vanilla' | 'fabric')}
+                >
+                  <div className="loader-icon">{opt.icon}</div>
+                  <div className="loader-info">
+                    <div className="loader-name">
+                      {opt.label}
+                      {!opt.enabled && <span className="loader-soon-tag">{t('inst.loader.soon')}</span>}
+                    </div>
+                    <div className="loader-desc">{opt.desc}</div>
+                  </div>
+                  {opt.enabled && <div className="loader-radio" />}
+                </div>
+              ))}
+            </div>
+            <div className="loader-step-hint">
+              {selectedLoader === 'fabric' ? t('inst.loader.fabric_desc') : t('inst.loader.vanilla_desc')}
+            </div>
+          </>
+          )
         ) : (
           <>
             <div className="vtabs" style={{ padding: '8px 16px 0', gap: 4, display: 'flex' }}>
@@ -801,14 +855,24 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
         </div>
 
         <div className="inst-modal-footer">
-          <button className="btn-cancel" onClick={onClose}>{t('inst.modal.cancel')}</button>
-          <button
-            className={`btn-ok${instType === 'lb' ? ' lb-btn' : ''}`}
-            onClick={handleCreate}
-            disabled={!selVer}
-          >
-            {t('inst.modal.create')}
-          </button>
+          {instType === 'mc' && step === 2 ? (
+            <button className="btn-cancel" onClick={() => setStep(1)}>{t('btn.back')}</button>
+          ) : (
+            <button className="btn-cancel" onClick={onClose}>{t('inst.modal.cancel')}</button>
+          )}
+          {instType === 'mc' && step === 1 ? (
+            <button className="btn-ok" onClick={() => setStep(2)} disabled={!selVer}>
+              {t('inst.loader.next')}
+            </button>
+          ) : (
+            <button
+              className={`btn-ok${instType === 'lb' ? ' lb-btn' : ''}`}
+              onClick={handleCreate}
+              disabled={!selVer}
+            >
+              {t('inst.modal.create')}
+            </button>
+          )}
         </div>
       </motion.div>
     </motion.div>
@@ -1455,28 +1519,34 @@ export default function App() {
         const concurrentDl = Number(localStorage.getItem('mlbv_concurrent') ?? '5') || 5
         const globalRam = Number(localStorage.getItem('mlbv_ram') ?? '2048') || 2048
         const ramMb = Number(localStorage.getItem(`mlbv_inst_ram_${activeInstance.id}`) || globalRam)
+        const showConsole = localStorage.getItem('mlbv_console_enabled') === '1'
+        const baseArgs = {
+          instanceName: activeInstance.name,
+          username: selected.username,
+          uuid: selected.uuid,
+          offline: selected.type === 'offline',
+          accessToken: selected.type === 'offline' ? '0' : (selected.accessToken ?? ''),
+          concurrentDownloads: concurrentDl,
+          maxRamMb: ramMb,
+        }
+        if (showConsole) {
+          invoke('open_console_window', { instanceName: activeInstance.name }).catch(() => {})
+        }
         if (activeInstance.type === 'lb' && activeInstance.buildId) {
           await invoke('launch_lb_game', {
             buildId: activeInstance.buildId,
             mcVersion: activeInstance.mcVersion,
-            instanceName: activeInstance.name,
-            username: selected.username,
-            uuid: selected.uuid,
-            offline: selected.type === 'offline',
-            accessToken: selected.type === 'offline' ? '0' : (selected.accessToken ?? ''),
-            concurrentDownloads: concurrentDl,
-            maxRamMb: ramMb,
+            ...baseArgs,
+          })
+        } else if (activeInstance.loader === 'fabric') {
+          await invoke('launch_fabric_game', {
+            versionId: activeInstance.mcVersion,
+            ...baseArgs,
           })
         } else {
           await invoke('launch_game', {
             versionId: activeInstance.mcVersion,
-            instanceName: activeInstance.name,
-            username: selected.username,
-            uuid: selected.uuid,
-            offline: selected.type === 'offline',
-            accessToken: selected.type === 'offline' ? '0' : (selected.accessToken ?? ''),
-            concurrentDownloads: concurrentDl,
-            maxRamMb: ramMb,
+            ...baseArgs,
           })
         }
         setProgress(100); setStatus('Launched!')
