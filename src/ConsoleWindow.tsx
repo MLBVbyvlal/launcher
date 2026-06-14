@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
+import { listen } from '@tauri-apps/api/event'
 import { getLang, useT } from './i18n'
 import './App.css'
 
@@ -9,9 +10,10 @@ interface ConsoleInfo {
   log_path: string
 }
 
-interface PollResult {
+interface JvmPollResult {
   lines: string[]
   new_offset: number
+  cleared: boolean
 }
 
 function lineClass(line: string): string {
@@ -22,6 +24,27 @@ function lineClass(line: string): string {
   return 'console-line-info'
 }
 
+function applyAccentConsole(hex?: string) {
+  try {
+    const h = hex ?? localStorage.getItem('mlbv_accent') ?? '#4ade80'
+    const m = /^#([0-9a-f]{6})$/i.exec(h.trim())
+    if (!m) return
+    const r = parseInt(m[1].slice(0,2),16)
+    const g = parseInt(m[1].slice(2,4),16)
+    const b = parseInt(m[1].slice(4,6),16)
+    const el = document.documentElement
+    const dark = `#${[r,g,b].map(c => Math.max(0,Math.round(c*0.72)).toString(16).padStart(2,'0')).join('')}`
+    el.style.setProperty('--accent-rgb', `${r} ${g} ${b}`)
+    el.style.setProperty('--accent', h)
+    el.style.setProperty('--accent-dark', dark)
+    el.style.setProperty('--accent-glow', `rgba(${r},${g},${b},0.45)`)
+    el.style.setProperty('--lb-accent-rgb', `${r} ${g} ${b}`)
+    el.style.setProperty('--lb-accent', h)
+    el.style.setProperty('--lb-accent-dark', dark)
+    el.style.setProperty('--lb-glow', `rgba(${r},${g},${b},0.45)`)
+  } catch { /* ignore */ }
+}
+
 export default function ConsoleWindow() {
   const t = useT(getLang())
   const [info, setInfo] = useState<ConsoleInfo | null>(null)
@@ -30,6 +53,17 @@ export default function ConsoleWindow() {
   const endRef = useRef<HTMLDivElement>(null)
   const offsetRef = useRef(0)
   const linesRef = useRef<string[]>([])
+
+  // Apply accent color from localStorage immediately
+  useEffect(() => { applyAccentConsole() }, [])
+
+  // Listen for accent changes from the main window
+  useEffect(() => {
+    const unlisten = listen<{ accent: string }>('accent-updated', evt => {
+      applyAccentConsole(evt.payload.accent)
+    })
+    return () => { unlisten.then(fn => fn()).catch(() => {}) }
+  }, [])
 
   // Get console info from Rust (instance name + log path)
   useEffect(() => {
@@ -47,16 +81,18 @@ export default function ConsoleWindow() {
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Poll log file for new lines
+  // Stream JVM output via in-memory buffer (no file dependency)
   useEffect(() => {
-    if (!info) return
     const id = setInterval(async () => {
       try {
-        const result = await invoke<PollResult>('poll_console', {
-          logPath: info.log_path,
+        const result = await invoke<JvmPollResult>('poll_jvm_output', {
           offset: offsetRef.current,
         })
-        if (result.lines.length > 0) {
+        if (result.cleared) {
+          linesRef.current = []
+          setLines([])
+          offsetRef.current = 0
+        } else if (result.lines.length > 0) {
           const next = [...linesRef.current.slice(-3000), ...result.lines]
           linesRef.current = next
           setLines([...next])
@@ -65,7 +101,7 @@ export default function ConsoleWindow() {
       } catch { /* ignore */ }
     }, 200)
     return () => clearInterval(id)
-  }, [info])
+  }, [])
 
   // Auto-scroll to bottom when new lines arrive
   useEffect(() => {

@@ -1,7 +1,7 @@
 [package]
 name = "mlbv"
-version = "0.0.5"
-description = "Minecraft Launcher by vlal"
+version = "0.0.4"
+description = "Minecraft Launcher by vlalikoffc"
 authors = ["vlalikoffc"]
 edition = "2021"
 

@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { getCurrentWindow } from '@tauri-apps/api/window'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
+import { listen, emit } from '@tauri-apps/api/event'
 import lbLogo from './assets/lb-logo.svg'
 import lbBadgePng from './assets/lb-badge-logo.png'
 import SetupWizard from './SetupWizard'
+import LbConfigsPanel from './LbConfigsPanel'
 import { getLang, type Lang, useT } from './i18n'
 import './App.css'
 
@@ -16,9 +17,10 @@ type MCVersion = { id: string; type: 'release' | 'snapshot' | 'old_alpha' | 'old
 type LBVersion = { tag: string; mcVersion: string; date: string; buildId?: number }
 type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number; loader?: 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'; loaderVersion?: string }
 type VFilter    = 'release' | 'snapshot' | 'old' | 'all'
+type LoaderVersionInfo = { version: string; stable: boolean; latest: boolean }
 type AppState   = 'loading' | 'ready' | 'error'
 type Tab        = 'mc' | 'lb'
-type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string; assetUrl: string }
+type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string; assetUrl: string; unstableWarning?: boolean }
 
 const spring = { type: 'spring', stiffness: 400, damping: 30 } as const
 
@@ -90,6 +92,11 @@ function applyAccent(hex: string, applyToLb = false) {
     root.setProperty('--lb-accent-dark', '#2563eb')
     root.setProperty('--lb-glow', 'rgba(76,139,245,0.38)')
     root.setProperty('--lb-accent-rgb', '76 139 245')
+  }
+  // Broadcast to all Tauri windows (console, etc.)
+  if ((window as any).__TAURI__) {
+    const lbHex = applyToLb ? hex : '#4c8bf5'
+    emit('accent-updated', { accent: hex, lbAccent: lbHex }).catch(() => {})
   }
 }
 
@@ -621,9 +628,14 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   const [instType, setInstType]       = useState<Tab>(defaultTab)
   const [step, setStep]               = useState<1 | 2 | 3>(1)
   const [selectedLoader, setSelectedLoader] = useState<'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'>('vanilla')
-  const [loaderVersions, setLoaderVersions] = useState<string[]>([])
+  const [loaderVersions, setLoaderVersions] = useState<LoaderVersionInfo[]>([])
   const [loaderVerLoading, setLoaderVerLoading] = useState(false)
   const [selectedLoaderVer, setSelectedLoaderVer] = useState<string>('')
+  const [loaderShowAll, setLoaderShowAll] = useState(false)
+  const [unstableWarn, setUnstableWarn]       = useState(false)
+  const [unstableCd, setUnstableCd]           = useState(10)
+  const [pendingUnstableVer, setPendingUnstableVer] = useState<string>('')
+  const unstableCdRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [vFilter, setVFilter]         = useState<VFilter>('release')
   const [selVer, setSelVer]           = useState<string>('')
   const [name, setName]               = useState('')
@@ -665,12 +677,16 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
     setLbLoading(false)
   }, [])
 
-  // Fetch branches list once
+  // Fetch branches list once — always keep nextgen + legacy, add any extras from API
   useEffect(() => {
     if (!isTauri) return
+    const fixed = ['nextgen', 'legacy']
     invoke<string[]>('get_lb_branches')
-      .then(b => setLbBranches(b))
-      .catch(() => {})
+      .then(b => {
+        const extra = b.filter(x => !fixed.includes(x))
+        setLbBranches([...fixed, ...extra])
+      })
+      .catch(() => {}) // on error keep hardcoded default
   }, [])
 
   // Load versions when switching to LB tab or changing branch
@@ -681,13 +697,14 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   // Reset step when switching to LB type
   useEffect(() => { if (instType === 'lb') setStep(1) }, [instType])
 
-  // Auto-pick first version when type/branch changes
+  // Auto-pick first real version when type/branch changes (skip "latest")
   useEffect(() => {
     if (instType === 'mc') {
       const filtered = mcVersions.filter(v => v.type === 'release')
       setSelVer(filtered[0]?.id ?? '')
     } else {
-      setSelVer(lbVersionsMap[lbBranch]?.[0]?.tag ?? '')
+      const real = lbVersionsMap[lbBranch]?.find(v => v.tag !== 'latest')
+      setSelVer(real?.tag ?? lbVersionsMap[lbBranch]?.[0]?.tag ?? '')
     }
     setNameEdited(false)
     setError('')
@@ -708,12 +725,17 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
 
   const displayName = nameEdited ? name : autoName
 
-  const filteredMc = mcVersions.filter(v => {
+  const filteredMcBase = mcVersions.filter(v => {
     if (vFilter === 'all')      return true
     if (vFilter === 'release')  return v.type === 'release'
     if (vFilter === 'snapshot') return v.type === 'snapshot'
     return v.type === 'old_beta' || v.type === 'old_alpha'
   })
+  // Prepend "Latest" pseudo-entry for release/all filters
+  const latestMcEntry: MCVersion = { id: 'latest', type: 'release', releaseTime: new Date().toISOString() }
+  const filteredMc = (vFilter === 'release' || vFilter === 'all')
+    ? [latestMcEntry, ...filteredMcBase]
+    : filteredMcBase
 
   const handleCreate = () => {
     const finalName = displayName.trim()
@@ -724,17 +746,20 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
       setTimeout(() => setShake(false), 500)
       return
     }
-    const lbBuild = currentLbVersions.find(v => v.tag === selVer)
-    const mcVer = instType === 'mc' ? selVer : (lbBuild?.mcVersion ?? selVer)
+    const lbBuild = currentLbVersions.find(v => v.tag === selVer && v.tag !== 'latest')
+    // For "latest" MC: store current latest as mcVersion hint, but keep version='latest'
+    const mcVerHint = instType === 'mc'
+      ? (selVer === 'latest' ? (filteredMcBase[0]?.id ?? 'latest') : selVer)
+      : (lbBuild?.mcVersion ?? (currentLbVersions.find(v => v.tag !== 'latest')?.mcVersion ?? selVer))
     onAdd({
       id: crypto.randomUUID(),
       name: finalName,
       type: instType,
       version: selVer,
-      mcVersion: mcVer,
-      buildId: lbBuild?.buildId,
+      mcVersion: mcVerHint,
+      buildId: selVer === 'latest' ? undefined : lbBuild?.buildId,
       loader: instType === 'mc' ? selectedLoader : undefined,
-      loaderVersion: (instType === 'mc' && selectedLoader !== 'vanilla') ? selectedLoaderVer : undefined,
+      loaderVersion: (instType === 'mc' && selectedLoader !== 'vanilla' && selVer !== 'latest') ? selectedLoaderVer : undefined,
     })
     onClose()
   }
@@ -772,13 +797,15 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
             <div className="vlist">
               {filteredMc.map(v => (
                 <motion.button key={v.id}
-                  className={`vitem${v.id === selVer ? ' picked' : ''}`}
+                  className={`vitem${v.id === selVer ? ' picked' : ''}${v.id === 'latest' ? ' latest-item' : ''}`}
                   onClick={() => { setSelVer(v.id); setNameEdited(false) }}
                   whileHover={{ x: 3 }} transition={spring}
                 >
-                  <span className={`vbadge ${v.type}`}>{verTag(v.type)}</span>
-                  <span className="vid">{v.id}</span>
-                  <span className="vyr">{new Date(v.releaseTime).getFullYear()}</span>
+                  <span className={`vbadge ${v.id === 'latest' ? 'latest' : v.type}`}>
+                    {v.id === 'latest' ? '★' : verTag(v.type)}
+                  </span>
+                  <span className="vid">{v.id === 'latest' ? 'Latest' : v.id}</span>
+                  {v.id !== 'latest' && <span className="vyr">{new Date(v.releaseTime).getFullYear()}</span>}
                   {v.id === selVer && <span className="vcheck">✓</span>}
                 </motion.button>
               ))}
@@ -813,26 +840,129 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
           </>
           ) : (
           <>
-            <div style={{ padding: '10px 16px 4px', display: 'flex', flexDirection: 'column', gap: 4 }}>
-              <div className="field-label">{t('inst.loader.ver.title')} — {selectedLoader.charAt(0).toUpperCase() + selectedLoader.slice(1)}</div>
+            <div style={{ padding: '10px 16px 4px', display: 'flex', alignItems: 'center', gap: 8 }}>
+              <div className="field-label" style={{ flex: 1 }}>{t('inst.loader.ver.title')} — {selectedLoader.charAt(0).toUpperCase() + selectedLoader.slice(1)}</div>
+              <div style={{ display: 'flex', gap: 3 }}>
+                {(['releases', 'all'] as const).map(f => (
+                  <button key={f}
+                    style={{
+                      padding: '2px 9px', borderRadius: 6, fontSize: 11, border: 'none', cursor: 'pointer',
+                      background: (f === 'releases') === !loaderShowAll ? 'var(--accent)' : 'rgba(255,255,255,0.07)',
+                      color: (f === 'releases') === !loaderShowAll ? '#fff' : 'var(--text-muted)',
+                      fontWeight: (f === 'releases') === !loaderShowAll ? 700 : 400,
+                      transition: 'background 0.18s, color 0.18s',
+                    }}
+                    onClick={() => setLoaderShowAll(f === 'all')}
+                  >{f === 'releases' ? t('loader.filter.releases') : t('loader.filter.all')}</button>
+                ))}
+              </div>
             </div>
             <div className="vlist">
               {loaderVerLoading ? (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.loader.ver.loading')}</div>
               ) : loaderVersions.length === 0 ? (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.loader.ver.none')}</div>
-              ) : loaderVersions.map(v => (
-                <motion.button key={v}
-                  className={`vitem${v === selectedLoaderVer ? ' picked' : ''}`}
-                  onClick={() => setSelectedLoaderVer(v)}
-                  whileHover={{ x: 3 }} transition={spring}
-                >
-                  <span className={`vbadge release`} style={{ fontSize: 8 }}>V</span>
-                  <span className="vid">{v}</span>
-                  {v === selectedLoaderVer && <span className="vcheck">✓</span>}
-                </motion.button>
-              ))}
+              ) : (() => {
+                const displayed = loaderShowAll ? loaderVersions : loaderVersions.filter(v => v.stable)
+                if (displayed.length === 0) return (
+                  <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('loader.no_releases')}</div>
+                )
+                return displayed.map(v => (
+                  <motion.button key={v.version}
+                    className={`vitem${v.version === selectedLoaderVer ? ' picked' : ''}`}
+                    onClick={() => {
+                      if (!v.stable) {
+                        setPendingUnstableVer(v.version)
+                        setUnstableWarn(true)
+                        setUnstableCd(10)
+                        if (unstableCdRef.current) clearInterval(unstableCdRef.current)
+                        unstableCdRef.current = setInterval(() => {
+                          setUnstableCd(prev => {
+                            if (prev <= 1) { clearInterval(unstableCdRef.current!); unstableCdRef.current = null; return 0 }
+                            return prev - 1
+                          })
+                        }, 1000)
+                      } else {
+                        setSelectedLoaderVer(v.version)
+                      }
+                    }}
+                    whileHover={{ x: 3 }} transition={spring}
+                  >
+                    {v.latest
+                      ? <span className="vbadge latest" style={{ fontSize: 10 }}>★</span>
+                      : v.stable
+                        ? <span className="vbadge release" style={{ fontSize: 8 }}>V</span>
+                        : <span className="vbadge unstable" style={{ fontSize: 11 }}>⚠</span>
+                    }
+                    <span className="vid">{v.version}</span>
+                    {!v.stable && <span style={{ fontSize: 10, color: '#f87171', marginLeft: 'auto', opacity: 0.8 }}>{t('loader.beta_label')}</span>}
+                    {v.version === selectedLoaderVer && <span className="vcheck">✓</span>}
+                  </motion.button>
+                ))
+              })()}
             </div>
+
+            {/* Unstable loader version warning modal */}
+            <AnimatePresence>
+              {unstableWarn && (
+                <motion.div
+                  initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                  style={{
+                    position: 'absolute', inset: 0, zIndex: 60, display: 'flex', alignItems: 'center', justifyContent: 'center',
+                    background: 'rgba(0,0,0,0.72)', backdropFilter: 'blur(6px)', borderRadius: 'inherit',
+                  }}
+                >
+                  <motion.div
+                    initial={{ scale: 0.88, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.88, opacity: 0 }}
+                    transition={{ type: 'spring', stiffness: 380, damping: 28 }}
+                    style={{
+                      background: 'rgba(18,10,10,0.96)', border: '1.5px solid rgba(248,113,113,0.55)',
+                      borderRadius: 16, padding: '24px 28px', maxWidth: 320, width: '90%',
+                      boxShadow: '0 0 40px rgba(248,113,113,0.22)',
+                    }}
+                  >
+                    <div style={{ fontSize: 28, textAlign: 'center', marginBottom: 8 }}>⚠️</div>
+                    <div style={{ fontSize: 15, fontWeight: 700, color: '#f87171', textAlign: 'center', marginBottom: 6 }}>
+                      {t('loader.unstable.title')}
+                    </div>
+                    <div style={{ fontSize: 12, color: 'rgba(248,113,113,0.82)', textAlign: 'center', marginBottom: 18, lineHeight: 1.5 }}>
+                      <b style={{ color: '#fca5a5' }}>{pendingUnstableVer}</b> {t('loader.unstable.body').split('\n').map((l, i) => <span key={i}>{i > 0 && <br/>}{l}</span>)}
+                    </div>
+                    <div style={{ display: 'flex', gap: 10 }}>
+                      <button
+                        style={{
+                          flex: 1, padding: '9px 0', borderRadius: 9, border: 'none', cursor: 'pointer',
+                          background: 'var(--accent)', color: '#fff', fontWeight: 700, fontSize: 13,
+                          transition: 'opacity 0.2s',
+                        }}
+                        onClick={() => {
+                          if (unstableCd > 0) return
+                          if (unstableCdRef.current) { clearInterval(unstableCdRef.current); unstableCdRef.current = null }
+                          setSelectedLoaderVer(pendingUnstableVer)
+                          setUnstableWarn(false)
+                        }}
+                      >
+                        {unstableCd > 0 ? t('loader.unstable.confirm_cd').replace('{0}', String(unstableCd)) : t('loader.unstable.confirm')}
+                      </button>
+                      <button
+                        style={{
+                          flex: 1, padding: '9px 0', borderRadius: 9, border: '1.5px solid var(--accent)', cursor: 'pointer',
+                          background: 'transparent', color: 'var(--accent)', fontWeight: 800, fontSize: 12,
+                          letterSpacing: 0.3,
+                        }}
+                        onClick={() => {
+                          if (unstableCdRef.current) { clearInterval(unstableCdRef.current); unstableCdRef.current = null }
+                          setPendingUnstableVer('')
+                          setUnstableWarn(false)
+                        }}
+                      >
+                        {t('loader.unstable.cancel')}
+                      </button>
+                    </div>
+                  </motion.div>
+                </motion.div>
+              )}
+            </AnimatePresence>
           </>
           )
         ) : (
@@ -860,18 +990,25 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
                 </div>
               ) : currentLbVersions.length === 0 ? (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.no_versions')}</div>
-              ) : currentLbVersions.map(v => (
-                <motion.button key={v.tag}
-                  className={`vitem${v.tag === selVer ? ' picked lb-picked' : ''}`}
-                  onClick={() => { setSelVer(v.tag); setNameEdited(false) }}
-                  whileHover={{ x: 3 }} transition={spring}
-                >
-                  <LbBadge />
-                  <span className="vid">{v.tag}</span>
-                  <span className="vyr">MC {v.mcVersion}</span>
-                  {v.tag === selVer && <span className="vcheck" style={{ color: 'var(--lb-accent)' }}>✓</span>}
-                </motion.button>
-              ))}
+              ) : (() => {
+                const lbDisplay = lbBranch === 'nextgen'
+                  ? [{ tag: 'latest', buildId: 0, mcVersion: '', date: '' } as LBVersion, ...currentLbVersions]
+                  : currentLbVersions
+                return lbDisplay.map(v => (
+                  <motion.button key={v.tag}
+                    className={`vitem${v.tag === selVer ? ' picked lb-picked' : ''}${v.tag === 'latest' ? ' latest-item' : ''}`}
+                    onClick={() => { setSelVer(v.tag); setNameEdited(false) }}
+                    whileHover={{ x: 3 }} transition={spring}
+                  >
+                    {v.tag === 'latest'
+                      ? <span className="vbadge latest">★</span>
+                      : <LbBadge />}
+                    <span className="vid">{v.tag === 'latest' ? 'Latest' : v.tag}</span>
+                    {v.tag !== 'latest' && <span className="vyr">MC {v.mcVersion}</span>}
+                    {v.tag === selVer && <span className="vcheck" style={{ color: 'var(--lb-accent)' }}>✓</span>}
+                  </motion.button>
+                ))
+              })()}
             </div>
           </>
         )}
@@ -901,13 +1038,19 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
           ) : instType === 'mc' && step === 2 ? (
             <button className="btn-ok" onClick={() => {
               if (selectedLoader === 'vanilla') { handleCreate(); return }
+              // For "latest" MC with fabric/quilt: skip version picker, use latest loader
+              if (selVer === 'latest' && (selectedLoader === 'fabric' || selectedLoader === 'quilt')) {
+                setSelectedLoaderVer('')
+                handleCreate()
+                return
+              }
               setStep(3)
               setSelectedLoaderVer('')
               setLoaderVersions([])
               if (isTauri) {
                 setLoaderVerLoading(true)
-                invoke<string[]>('get_loader_versions', { mcVer: selVer, loader: selectedLoader })
-                  .then(vs => { setLoaderVersions(vs); if (vs.length > 0) setSelectedLoaderVer(vs[0]) })
+                invoke<LoaderVersionInfo[]>('get_loader_versions', { mcVer: selVer, loader: selectedLoader })
+                  .then(vs => { setLoaderVersions(vs); const first = vs.find(v => v.stable) ?? vs[0]; if (first) setSelectedLoaderVer(first.version) })
                   .catch(() => {})
                   .finally(() => setLoaderVerLoading(false))
               }
@@ -972,7 +1115,7 @@ function CrashDialog({ info, onClose }: { info: CrashInfo; onClose: () => void }
 // ─── Instance Context Menu ────────────────────────────────────────────────────
 
 type CtxTarget = { inst: Instance; x: number; y: number }
-type CtxAction = 'rename' | 'settings' | 'reinstall' | 'delete'
+type CtxAction = 'rename' | 'settings' | 'reinstall' | 'delete' | 'open_folder'
 
 function InstanceCtxMenu({ target, isLb, onAction, onClose }: {
   target: CtxTarget; isLb: boolean
@@ -980,7 +1123,7 @@ function InstanceCtxMenu({ target, isLb, onAction, onClose }: {
   onClose: () => void
 }) {
   const t = useT(getLang())
-  const W = 176, H = 196
+  const W = 176, H = 228
   const x = Math.min(target.x, window.innerWidth  - W - 8)
   const y = Math.min(target.y, window.innerHeight - H - 8)
   return (
@@ -998,6 +1141,10 @@ function InstanceCtxMenu({ target, isLb, onAction, onClose }: {
         <button className="ctx-item" onClick={() => { onAction('settings', target.inst); onClose() }}>
           <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" strokeLinejoin="round"><path d="M10.27 2h-.54a1.5 1.5 0 0 0-1.5 1.5v.14a1.5 1.5 0 0 1-.75 1.3l-.32.18a1.5 1.5 0 0 1-1.5 0l-.12-.06a1.5 1.5 0 0 0-2.05.55l-.27.47a1.5 1.5 0 0 0 .55 2.05l.11.07a1.5 1.5 0 0 1 .75 1.3v.38a1.5 1.5 0 0 1-.75 1.3l-.11.07a1.5 1.5 0 0 0-.55 2.05l.27.47a1.5 1.5 0 0 0 2.05.55l.12-.06a1.5 1.5 0 0 1 1.5 0l.32.18a1.5 1.5 0 0 1 .75 1.3v.14A1.5 1.5 0 0 0 9.73 18h.54a1.5 1.5 0 0 0 1.5-1.5v-.14a1.5 1.5 0 0 1 .75-1.3l.32-.18a1.5 1.5 0 0 1 1.5 0l.12.06a1.5 1.5 0 0 0 2.05-.55l.27-.47a1.5 1.5 0 0 0-.55-2.05l-.11-.07A1.5 1.5 0 0 1 15.37 11v-.38a1.5 1.5 0 0 1 .75-1.3l.11-.07a1.5 1.5 0 0 0 .55-2.05l-.27-.47a1.5 1.5 0 0 0-2.05-.55l-.12.06a1.5 1.5 0 0 1-1.5 0l-.32-.18a1.5 1.5 0 0 1-.75-1.3V3.5A1.5 1.5 0 0 0 10.27 2z"/><circle cx="10" cy="10" r="2.25"/></svg>
           {t('ctx.settings')}
+        </button>
+        <button className="ctx-item" onClick={() => { onAction('open_folder', target.inst); onClose() }}>
+          <svg viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M2 6.5A1.5 1.5 0 0 1 3.5 5h4l2 2h7A1.5 1.5 0 0 1 18 8.5v7A1.5 1.5 0 0 1 16.5 17h-13A1.5 1.5 0 0 1 2 15.5v-9z"/></svg>
+          Открыть папку
         </button>
         <div className="ctx-sep" />
         <button className="ctx-item ctx-warn" onClick={() => { onAction('reinstall', target.inst); onClose() }}>
@@ -1357,6 +1504,16 @@ function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void 
           {phase === 'ask' && <button className="modal-close" onClick={onClose}>×</button>}
         </div>
 
+        {phase === 'ask' && info.unstableWarning && (
+          <div style={{
+            background: 'rgba(251,191,36,0.1)', border: '1px solid rgba(251,191,36,0.3)',
+            borderRadius: 8, padding: '10px 14px', marginBottom: 12, fontSize: 12,
+            color: 'rgba(255,255,255,0.8)', lineHeight: 1.55
+          }}>
+            <strong style={{ color: '#fbbf24' }}>{t('update.unstable_warn')}</strong>{' '}
+            {t('update.unstable_body')}
+          </div>
+        )}
         {phase === 'ask' && <>
           {info.body
             ? <pre className="update-changelog">{info.body.trim()}</pre>
@@ -1524,6 +1681,9 @@ export default function App() {
   const [launching, setLaunching]             = useState(false)
   const [launchingTab, setLaunchingTab]       = useState<Tab | null>(null)
   const [gameRunning, setGameRunning]         = useState<Tab | null>(null)
+  const [stopWarn, setStopWarn]               = useState(false)
+  const [stopCd, setStopCd]                   = useState(5)
+  const stopCdRef = useRef<ReturnType<typeof setInterval> | null>(null)
   const [busyFlash, setBusyFlash]             = useState<Tab | null>(null)
   const [progress, setProgress]               = useState(0)
   const [status, setStatus]                   = useState('')
@@ -1532,6 +1692,7 @@ export default function App() {
   const swipeStartX = useRef<number | null>(null)
 
   // Download controls
+  const [showLbConfigs, setShowLbConfigs]     = useState(false)
   const [dlPaused, setDlPaused]               = useState(false)
   const [dlSpeedBps, setDlSpeedBps]           = useState(0)
 
@@ -1542,6 +1703,11 @@ export default function App() {
   // Crash dialog
   const [crashInfo, setCrashInfo]             = useState<CrashInfo | null>(null)
   const lastLaunchedInst = useRef<Instance | null>(null)
+
+  // Latest version feature
+  const [newVerToast, setNewVerToast]         = useState<{ type: 'mc' | 'lb'; ver: string } | null>(null)
+  const [fetchFailModal, setFetchFailModal]   = useState<{ onContinue: () => void; onCancel: () => void } | null>(null)
+  const [loaderNotAvail, setLoaderNotAvail]   = useState<{ loader: string; mcVer: string } | null>(null)
 
   // Context menu
   const [ctxMenu, setCtxMenu]                 = useState<CtxTarget | null>(null)
@@ -1597,9 +1763,9 @@ export default function App() {
     invoke<string>('get_just_updated')
       .then(ver => { if (ver) { setJustUpdated(ver); setTimeout(() => setJustUpdated(null), 5000) } })
       .catch(() => {})
-    type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string }
+    type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string; unstable_warning: boolean }
     invoke<RawRelease | null>('check_for_update')
-      .then(r => { if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url }) })
+      .then(r => { if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, unstableWarning: r.unstable_warning }) })
       .catch(() => {})
   }, [appState])
 
@@ -1644,10 +1810,11 @@ export default function App() {
   }
 
   const handleCtxAction = (action: CtxAction, inst: Instance) => {
-    if (action === 'delete')    { setDeleteOf(inst) }
-    if (action === 'rename')    { setRenamingId(inst.id); setRenameText(inst.name) }
-    if (action === 'settings')  { setInstSettingsOf(inst) }
-    if (action === 'reinstall') { setReinstallOf(inst) }
+    if (action === 'delete')      { setDeleteOf(inst) }
+    if (action === 'rename')      { setRenamingId(inst.id); setRenameText(inst.name) }
+    if (action === 'settings')    { setInstSettingsOf(inst) }
+    if (action === 'reinstall')   { setReinstallOf(inst) }
+    if (action === 'open_folder') { if (isTauri) invoke('open_game_dir', { instanceName: inst.name }).catch(() => {}) }
   }
 
   const handleDeleteDisk = (inst: Instance) => {
@@ -1689,9 +1856,22 @@ export default function App() {
   }, [])
 
   // ── Stop running game ─────────────────────────────────────────────────────
-  const handleStop = async () => {
+  const handleStop = () => {
+    setStopWarn(true)
+    setStopCd(5)
+    if (stopCdRef.current) clearInterval(stopCdRef.current)
+    stopCdRef.current = setInterval(() => {
+      setStopCd(prev => {
+        if (prev <= 1) { clearInterval(stopCdRef.current!); stopCdRef.current = null; return 0 }
+        return prev - 1
+      })
+    }, 1000)
+  }
+  const confirmStop = async () => {
+    if (stopCdRef.current) { clearInterval(stopCdRef.current); stopCdRef.current = null }
+    setStopWarn(false)
     if (!isTauri) return
-    try { await invoke('stop_game') } catch { /* already stopped */ }
+    try { await invoke('stop_game') } catch {}
   }
 
   // ── Download controls ─────────────────────────────────────────────────────
@@ -1733,8 +1913,85 @@ export default function App() {
         const globalRam = Number(localStorage.getItem('mlbv_ram') ?? '2048') || 2048
         const ramMb = Number(localStorage.getItem(`mlbv_inst_ram_${activeInstance.id}`) || globalRam)
         const showConsole = localStorage.getItem('mlbv_console_enabled') === '1'
+
+        // ── Resolve "latest" version before launch ────────────────────────
+        let resolvedInst = activeInstance
+        if (activeInstance.version === 'latest') {
+          setStatus('Fetching latest version…')
+
+          if (activeInstance.type === 'lb') {
+            // ─ LB Latest ─────────────────────────────────────────────────
+            try {
+              type RawBuild = { build_id: number; lb_version: string; mc_version: string }
+              const builds = await invoke<RawBuild[]>('get_lb_versions', { branch: 'nextgen' })
+              const latest = builds[0]
+              if (latest) {
+                const lastKnown = localStorage.getItem('mlbv_last_lb_latest') ?? ''
+                if (lastKnown && latest.lb_version !== lastKnown) {
+                  setNewVerToast({ type: 'lb', ver: latest.lb_version })
+                  setTimeout(() => setNewVerToast(null), 6000)
+                }
+                localStorage.setItem('mlbv_last_lb_latest', latest.lb_version)
+                localStorage.setItem('mlbv_last_lb_latest_buildid', String(latest.build_id))
+                localStorage.setItem('mlbv_last_lb_latest_mcver', latest.mc_version)
+                resolvedInst = { ...activeInstance, buildId: latest.build_id, mcVersion: latest.mc_version }
+              }
+            } catch {
+              const ok = await new Promise<boolean>(resolve => {
+                setFetchFailModal({ onContinue: () => resolve(true), onCancel: () => resolve(false) })
+              })
+              setFetchFailModal(null)
+              if (!ok) return  // finally handles cleanup
+              const lastBuildId = Number(localStorage.getItem('mlbv_last_lb_latest_buildid') ?? '0')
+              const lastMcVer   = localStorage.getItem('mlbv_last_lb_latest_mcver') ?? activeInstance.mcVersion
+              if (lastBuildId) resolvedInst = { ...activeInstance, buildId: lastBuildId, mcVersion: lastMcVer }
+            }
+
+          } else {
+            // ─ MC Latest ─────────────────────────────────────────────────
+            try {
+              const mf = await fetch('https://launchermeta.mojang.com/mc/game/version_manifest_v2.json')
+                .then(r => r.json()) as { versions: MCVersion[] }
+              const latestRelease = mf.versions.find(v => v.type === 'release')
+              if (latestRelease) {
+                const lastKnown = localStorage.getItem('mlbv_last_mc_latest') ?? ''
+                if (lastKnown && latestRelease.id !== lastKnown) {
+                  setNewVerToast({ type: 'mc', ver: latestRelease.id })
+                  setTimeout(() => setNewVerToast(null), 6000)
+                }
+                localStorage.setItem('mlbv_last_mc_latest', latestRelease.id)
+                resolvedInst = { ...activeInstance, mcVersion: latestRelease.id }
+              }
+            } catch {
+              const lastKnown = localStorage.getItem('mlbv_last_mc_latest')
+              const ok = await new Promise<boolean>(resolve => {
+                setFetchFailModal({ onContinue: () => resolve(true), onCancel: () => resolve(false) })
+              })
+              setFetchFailModal(null)
+              if (!ok) return  // finally handles cleanup
+              if (lastKnown) resolvedInst = { ...activeInstance, mcVersion: lastKnown }
+            }
+
+            // ─ Loader compatibility pre-check ────────────────────────────
+            const loader = resolvedInst.loader
+            if (loader && loader !== 'vanilla') {
+              setStatus(`Проверяем ${loader} для MC ${resolvedInst.mcVersion}…`)
+              try {
+                const loaderVersions = await invoke<LoaderVersionInfo[]>('get_loader_versions', {
+                  mcVer: resolvedInst.mcVersion,
+                  loader,
+                })
+                if (loaderVersions.length === 0) {
+                  setLoaderNotAvail({ loader, mcVer: resolvedInst.mcVersion })
+                  return  // finally cleans up launching state
+                }
+              } catch { /* network error — Rust will surface a clear error at launch */ }
+            }
+          }
+        }
+
         const baseArgs = {
-          instanceName: activeInstance.name,
+          instanceName: resolvedInst.name,
           username: selected.username,
           uuid: selected.uuid,
           offline: selected.type === 'offline',
@@ -1743,29 +2000,41 @@ export default function App() {
           maxRamMb: ramMb,
         }
         if (showConsole) {
-          invoke('open_console_window', { instanceName: activeInstance.name }).catch(() => {})
+          invoke('open_console_window', { instanceName: resolvedInst.name }).catch(() => {})
         }
-        if (activeInstance.type === 'lb' && activeInstance.buildId) {
+        if (resolvedInst.type === 'lb' && resolvedInst.buildId) {
           await invoke('launch_lb_game', {
-            buildId: activeInstance.buildId,
-            mcVersion: activeInstance.mcVersion,
+            buildId: resolvedInst.buildId,
+            mcVersion: resolvedInst.mcVersion,
             ...baseArgs,
           })
-        } else if (activeInstance.loader === 'fabric') {
+        } else if (resolvedInst.loader === 'fabric') {
           await invoke('launch_fabric_game', {
-            versionId: activeInstance.mcVersion,
-            loaderVersion: activeInstance.loaderVersion ?? '',
+            versionId: resolvedInst.mcVersion,
+            loaderVersion: resolvedInst.loaderVersion ?? '',
             ...baseArgs,
           })
-        } else if (activeInstance.loader === 'quilt') {
+        } else if (resolvedInst.loader === 'quilt') {
           await invoke('launch_quilt_game', {
-            versionId: activeInstance.mcVersion,
-            loaderVersion: activeInstance.loaderVersion ?? '',
+            versionId: resolvedInst.mcVersion,
+            loaderVersion: resolvedInst.loaderVersion ?? '',
+            ...baseArgs,
+          })
+        } else if (resolvedInst.loader === 'forge') {
+          await invoke('launch_forge_game', {
+            versionId: resolvedInst.mcVersion,
+            forgeVersion: resolvedInst.loaderVersion ?? '',
+            ...baseArgs,
+          })
+        } else if (resolvedInst.loader === 'neoforge') {
+          await invoke('launch_neoforge_game', {
+            versionId: resolvedInst.mcVersion,
+            neoforgeVersion: resolvedInst.loaderVersion ?? '',
             ...baseArgs,
           })
         } else {
           await invoke('launch_game', {
-            versionId: activeInstance.mcVersion,
+            versionId: resolvedInst.mcVersion,
             ...baseArgs,
           })
         }
@@ -2074,12 +2343,32 @@ export default function App() {
                     onClick={() => setActiveTab(tab)}
                   >
                     {isOtherBusy && <div className="tab-pill-fill" style={{ width: `${progress}%` }} />}
-                    <span className="tab-pill-label">
-                      {isOtherBusy ? `${progress}%` : label}
-                    </span>
+                    <AnimatePresence mode="wait" initial={false}>
+                      <motion.span key={isOtherBusy ? 'progress' : label}
+                        className="tab-pill-label"
+                        initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+                        transition={{ duration: 0.18 }}
+                      >
+                        {isOtherBusy ? `${progress}%` : label}
+                      </motion.span>
+                    </AnimatePresence>
                   </button>
                 )
               })}
+              <AnimatePresence>
+                {activeTab === 'lb' && (
+                  <motion.button
+                    key="lb-configs-btn"
+                    className="tab-pill tab-pill-lb-plus"
+                    initial={{ opacity: 0, width: 0, marginLeft: 0 }}
+                    animate={{ opacity: 1, width: 36, marginLeft: 6 }}
+                    exit={{ opacity: 0, width: 0, marginLeft: 0 }}
+                    transition={{ duration: 0.25, ease: [0.4, 0, 0.2, 1] }}
+                    onClick={() => setShowLbConfigs(true)}
+                    title="LB Config Catalog"
+                  >+</motion.button>
+                )}
+              </AnimatePresence>
             </div>
 
             <AnimatePresence mode="wait">
@@ -2408,6 +2697,50 @@ export default function App() {
           )}
         </AnimatePresence>
 
+        {/* ── STOP GAME WARNING ── */}
+        <AnimatePresence>
+          {stopWarn && (
+            <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}>
+              <motion.div className="modal glass"
+                initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 16 }} transition={spring}
+                onClick={e => e.stopPropagation()}
+                style={{ maxWidth: 320, padding: '24px 28px', textAlign: 'center' }}
+              >
+                <div style={{ fontSize: 28, marginBottom: 8 }}>⚠️</div>
+                <div style={{ fontSize: 15, fontWeight: 700, color: 'var(--text-primary)', marginBottom: 8 }}>{t('stop.warn.title')}</div>
+                <div style={{ fontSize: 12, color: 'var(--text-muted)', marginBottom: 20, lineHeight: 1.5 }}>
+                  {t('stop.warn.body').split('\n').map((l, i) => <span key={i}>{i > 0 && <br/>}{l}</span>)}
+                </div>
+                <div style={{ display: 'flex', gap: 10 }}>
+                  <button
+                    style={{
+                      flex: 1, padding: '9px 0', borderRadius: 9, border: 'none', cursor: stopCd > 0 ? 'not-allowed' : 'pointer',
+                      background: stopCd > 0 ? 'rgba(248,113,113,0.3)' : '#f87171',
+                      color: '#fff', fontWeight: 700, fontSize: 13, opacity: stopCd > 0 ? 0.7 : 1,
+                      transition: 'all 0.2s',
+                    }}
+                    onClick={confirmStop}
+                    disabled={stopCd > 0}
+                  >
+                    {stopCd > 0 ? t('stop.warn.yes_cd').replace('{0}', String(stopCd)) : t('stop.warn.yes')}
+                  </button>
+                  <button
+                    style={{
+                      flex: 1, padding: '9px 0', borderRadius: 9, border: '1.5px solid var(--accent)',
+                      cursor: 'pointer', background: 'transparent', color: 'var(--accent)', fontWeight: 700, fontSize: 13,
+                    }}
+                    onClick={() => {
+                      if (stopCdRef.current) { clearInterval(stopCdRef.current); stopCdRef.current = null }
+                      setStopWarn(false)
+                    }}
+                  >{t('stop.warn.no')}</button>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
         {/* ── CRASH DIALOG ── */}
         <AnimatePresence>
           {crashInfo && (
@@ -2440,8 +2773,93 @@ export default function App() {
           )}
         </AnimatePresence>
 
+        {/* ── NEW VERSION TOAST ── */}
+        <AnimatePresence>
+          {newVerToast && (
+            <motion.div className="new-ver-toast"
+              initial={{ opacity: 0, y: 16, scale: 0.95 }}
+              animate={{ opacity: 1, y: 0, scale: 1 }}
+              exit={{ opacity: 0, y: 10, scale: 0.95 }}
+              transition={spring}
+            >
+              ✦ {newVerToast.type === 'lb' ? 'LiquidBounce' : 'Minecraft'} {newVerToast.ver} — новая версия!
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── LOADER NOT AVAILABLE MODAL ── */}
+        <AnimatePresence>
+          {loaderNotAvail && (
+            <motion.div className="overlay" style={{ zIndex: 700 }}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            >
+              <motion.div className="modal glass" style={{ width: 400 }}
+                initial={{ opacity: 0, scale: 0.9, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 16 }} transition={spring}
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="modal-head">
+                  <span className="modal-title">⚠ Загрузчик недоступен</span>
+                  <button className="modal-close" onClick={() => setLoaderNotAvail(null)}>×</button>
+                </div>
+                <div className="fetch-fail-body">
+                  <div className="fetch-fail-icon">🧩</div>
+                  <div className="fetch-fail-text">
+                    <strong>{loaderNotAvail.loader.charAt(0).toUpperCase() + loaderNotAvail.loader.slice(1)}</strong> ещё не поддерживает Minecraft {loaderNotAvail.mcVer}.
+                    <br /><br />
+                    Авторы загрузчика обычно выпускают поддержку в течение нескольких дней после выхода новой версии MC.
+                    Попробуйте запустить позже.
+                  </div>
+                  <div className="fetch-fail-actions">
+                    <button className="btn-ok" onClick={() => setLoaderNotAvail(null)}>Понятно</button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {/* ── FETCH FAIL MODAL ── */}
+        <AnimatePresence>
+          {fetchFailModal && (
+            <motion.div className="overlay" style={{ zIndex: 700 }}
+              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+            >
+              <motion.div className="modal glass" style={{ width: 380 }}
+                initial={{ opacity: 0, scale: 0.9, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+                exit={{ opacity: 0, scale: 0.9, y: 16 }} transition={spring}
+                onClick={e => e.stopPropagation()}
+              >
+                <div className="modal-head">
+                  <span className="modal-title">⚠ Ошибка получения версии</span>
+                </div>
+                <div className="fetch-fail-body">
+                  <div className="fetch-fail-icon">🌐</div>
+                  <div className="fetch-fail-text">
+                    Не удалось получить список версий. Версия могла устареть и бла бла бла. Вы можете продолжить с последней известной версией или отменить запуск.
+                  </div>
+                  <div className="fetch-fail-actions">
+                    <button className="btn-cancel" onClick={fetchFailModal.onCancel}>Отмена</button>
+                    <button className="btn-ok" onClick={fetchFailModal.onContinue}>Продолжить с кешем</button>
+                  </div>
+                </div>
+              </motion.div>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
       </motion.div>
       )}
+      </AnimatePresence>
+
+      {/* ── LB CONFIGS CATALOG ── */}
+      <AnimatePresence>
+        {showLbConfigs && (
+          <LbConfigsPanel
+            onClose={() => setShowLbConfigs(false)}
+            lbInstances={lbInstances.map(i => ({ name: i.name, version: i.version }))}
+          />
+        )}
       </AnimatePresence>
 
       {/* ── SETUP WIZARD (overlays everything) ── */}

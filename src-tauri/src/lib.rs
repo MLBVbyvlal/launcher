@@ -370,6 +370,16 @@ fn open_instance_logs_folder(app: tauri::AppHandle, instance_name: String) -> Re
 }
 
 #[tauri::command]
+fn open_game_dir(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
+    use tauri_plugin_opener::OpenerExt;
+    let game_dir = launcher::instances_dir().join(&instance_name);
+    let _ = std::fs::create_dir_all(&game_dir);
+    app.opener()
+       .open_path(game_dir.to_string_lossy().as_ref(), None::<&str>)
+       .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
 fn reinstall_instance(instance_name: String, full_wipe: bool) -> Result<(), String> {
     let inst_dir = launcher::instances_dir().join(&instance_name);
     if !inst_dir.exists() { return Ok(()); }
@@ -399,11 +409,27 @@ struct ReleaseInfo {
     tag_name: String,
     body:     String,
     html_url: String,
-    asset_url: String,   // direct .exe download URL; empty if no asset found
+    asset_url: String,
+    unstable_warning: bool,
+}
+
+fn strip_type_prefix(v: &str) -> &str {
+    let v = v.trim_start_matches('v');
+    for p in &["beta", "pre-release", "release"] {
+        if let Some(rest) = v.strip_prefix(p) { return rest; }
+    }
+    v
+}
+
+fn version_type(v: &str) -> &'static str {
+    let v = v.trim_start_matches('v');
+    if v.starts_with("beta") { "beta" }
+    else if v.starts_with("pre-release") { "pre-release" }
+    else { "release" }
 }
 
 fn parse_semver(v: &str) -> (u64, u64, u64) {
-    let v = v.trim_start_matches('v');
+    let v = strip_type_prefix(v);
     let mut parts = v.splitn(3, '.').map(|p| p.parse().unwrap_or(0));
     (parts.next().unwrap_or(0), parts.next().unwrap_or(0), parts.next().unwrap_or(0))
 }
@@ -411,6 +437,7 @@ fn parse_semver(v: &str) -> (u64, u64, u64) {
 #[tauri::command]
 async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
     let current = env!("CARGO_PKG_VERSION");
+    let current_type = version_type(current);
     let client = reqwest::Client::builder()
         .user_agent("MLBV/1.0")
         .build().map_err(|e| e.to_string())?;
@@ -419,10 +446,19 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
         .header("Accept", "application/vnd.github+json")
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| e.to_string())?;
-    // First non-draft published release (includes pre-releases/betas)
+    // If running a stable release, only consider stable GitHub releases (prerelease: false)
+    // If running beta/pre-release, consider all non-draft releases
     let release = releases.iter()
-        .find(|r| !r["draft"].as_bool().unwrap_or(false))
+        .find(|r| {
+            if r["draft"].as_bool().unwrap_or(false) { return false; }
+            if current_type == "release" {
+                !r["prerelease"].as_bool().unwrap_or(false)
+            } else {
+                true
+            }
+        })
         .ok_or_else(|| "No releases found".to_string())?;
+
     let tag = release["tag_name"].as_str().unwrap_or("").to_string();
     let ver = tag.trim_start_matches('v');
     if parse_semver(ver) <= parse_semver(current) {
@@ -437,12 +473,17 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
         .unwrap_or("")
         .to_string();
 
+    // Warn if stable user is offered a beta/pre-release
+    let new_type = version_type(ver);
+    let unstable_warning = current_type == "release" && new_type != "release";
+
     Ok(Some(ReleaseInfo {
         version:  ver.to_string(),
         tag_name: tag,
         body:     release["body"].as_str().unwrap_or("").to_string(),
         html_url: release["html_url"].as_str().unwrap_or("").to_string(),
         asset_url,
+        unstable_warning,
     }))
 }
 
@@ -612,6 +653,7 @@ fn get_console_info(app: tauri::AppHandle) -> Option<ConsoleInfo> {
 struct PollResult {
     lines: Vec<String>,
     new_offset: u64,
+    cleared: bool,
 }
 
 #[tauri::command]
@@ -619,25 +661,175 @@ fn poll_console(log_path: String, offset: u64) -> PollResult {
     use std::io::{Read, Seek, SeekFrom};
     let path = std::path::Path::new(&log_path);
     if !path.exists() {
-        return PollResult { lines: vec![], new_offset: offset };
+        return PollResult { lines: vec![], new_offset: offset, cleared: false };
     }
     let mut file = match std::fs::File::open(path) {
         Ok(f) => f,
-        Err(_) => return PollResult { lines: vec![], new_offset: offset },
+        Err(_) => return PollResult { lines: vec![], new_offset: offset, cleared: false },
     };
     let file_size = match file.metadata() {
         Ok(m) => m.len(),
-        Err(_) => return PollResult { lines: vec![], new_offset: offset },
+        Err(_) => return PollResult { lines: vec![], new_offset: offset, cleared: false },
     };
-    if file_size <= offset {
-        return PollResult { lines: vec![], new_offset: offset };
+    // File was truncated (new game launch rewrote latest.log) — read from start and signal clear
+    let truncated = file_size < offset;
+    let actual_offset = if truncated { 0 } else { offset };
+    if file_size == actual_offset {
+        return PollResult { lines: vec![], new_offset: actual_offset, cleared: false };
     }
-    let _ = file.seek(SeekFrom::Start(offset));
+    let _ = file.seek(SeekFrom::Start(actual_offset));
     let mut content = String::new();
     let _ = file.read_to_string(&mut content);
     let new_offset = file.seek(SeekFrom::Current(0)).unwrap_or(file_size);
     let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-    PollResult { lines, new_offset }
+    PollResult { lines, new_offset, cleared: truncated }
+}
+
+// ── JVM output streaming ────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct JvmPollResult {
+    lines: Vec<String>,
+    new_offset: usize,
+    cleared: bool,
+}
+
+#[tauri::command]
+fn poll_jvm_output(offset: usize, app: tauri::AppHandle) -> JvmPollResult {
+    let state = app.state::<launcher::GameState>();
+    let lines = state.jvm_lines.lock().unwrap();
+    if offset > 0 && lines.is_empty() {
+        return JvmPollResult { lines: vec![], new_offset: 0, cleared: true };
+    }
+    if offset >= lines.len() {
+        return JvmPollResult { lines: vec![], new_offset: lines.len(), cleared: false };
+    }
+    let new_lines = lines[offset..].to_vec();
+    let new_offset = lines.len();
+    JvmPollResult { lines: new_lines, new_offset, cleared: false }
+}
+
+// ── LB config install ────────────────────────────────────────────────────────
+
+#[tauri::command]
+async fn install_lb_config(json_url: String, instance_name: String, file_name: String) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .user_agent("MLBV/1.0")
+        .build()
+        .map_err(|e| e.to_string())?;
+    let bytes = client
+        .get(&json_url)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?
+        .bytes()
+        .await
+        .map_err(|e| e.to_string())?;
+    let instance_dir = launcher::instances_dir().join(&instance_name);
+    // Auto-detect LiquidBounce configs folder (case-insensitive, with or without dot prefix)
+    let configs_dir = ["LiquidBounce", "liquidbounce", ".liquidbounce"]
+        .iter()
+        .map(|f| instance_dir.join(f).join("configs"))
+        .find(|p| p.exists())
+        .unwrap_or_else(|| instance_dir.join("LiquidBounce").join("configs"));
+    std::fs::create_dir_all(&configs_dir).map_err(|e| e.to_string())?;
+    std::fs::write(configs_dir.join(&file_name), bytes).map_err(|e| e.to_string())?;
+    Ok(())
+}
+
+#[derive(serde::Serialize)]
+struct LbInstallTarget {
+    name: String,
+}
+
+#[tauri::command]
+fn get_lb_installable_instances() -> Vec<LbInstallTarget> {
+    let base = launcher::instances_dir();
+    let mut result = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&base) else { return result; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        let has_lb = ["LiquidBounce", "liquidbounce", ".liquidbounce"]
+            .iter()
+            .any(|f| path.join(f).is_dir());
+        if has_lb {
+            result.push(LbInstallTarget { name });
+        }
+    }
+    result
+}
+
+// ── Instance auto-detect ─────────────────────────────────────────────────────
+
+#[derive(serde::Serialize)]
+struct FoundInstance {
+    name: String,
+    instance_type: String,
+    mc_version: Option<String>,
+    loader: Option<String>,
+    loader_version: Option<String>,
+}
+
+#[tauri::command]
+fn scan_instances() -> Vec<FoundInstance> {
+    let base = launcher::instances_dir();
+    let mut found = Vec::new();
+    let Ok(entries) = std::fs::read_dir(&base) else { return found; };
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_dir() { continue; }
+        let name = entry.file_name().to_string_lossy().into_owned();
+        // Try reading .mlbv-instance.json first
+        let meta_path = path.join(".mlbv-instance.json");
+        if let Ok(text) = std::fs::read_to_string(&meta_path) {
+            if let Ok(v) = serde_json::from_str::<serde_json::Value>(&text) {
+                found.push(FoundInstance {
+                    name: v["name"].as_str().unwrap_or(&name).to_string(),
+                    instance_type: v["type"].as_str().unwrap_or("mc").to_string(),
+                    mc_version: v["mcVersion"].as_str().map(|s| s.to_string()),
+                    loader: v["loader"].as_str().map(|s| s.to_string()),
+                    loader_version: v["loaderVersion"].as_str().map(|s| s.to_string()),
+                });
+                continue;
+            }
+        }
+        // Guess type from filesystem
+        let is_lb = path.join(".liquidbounce").is_dir();
+        found.push(FoundInstance {
+            name: name.clone(),
+            instance_type: if is_lb { "lb".to_string() } else { "mc".to_string() },
+            mc_version: None,
+            loader: None,
+            loader_version: None,
+        });
+    }
+    found
+}
+
+// ── Instance metadata save/delete ────────────────────────────────────────────
+
+#[tauri::command]
+fn save_instance_metadata(
+    instance_name: String,
+    instance_type: String,
+    mc_version: String,
+    loader: String,
+    loader_version: String,
+) -> Result<(), String> {
+    let meta = serde_json::json!({
+        "name": instance_name,
+        "type": instance_type,
+        "mcVersion": mc_version,
+        "loader": loader,
+        "loaderVersion": loader_version,
+    });
+    let path = launcher::instances_dir()
+        .join(&instance_name)
+        .join(".mlbv-instance.json");
+    std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
+    std::fs::write(&path, meta.to_string()).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -723,8 +915,28 @@ fn delete_instance_data(instance_name: String) -> Result<(), String> {
     Ok(())
 }
 
+#[derive(serde::Serialize, Clone)]
+struct LoaderVersionInfo {
+    version: String,
+    stable:  bool,
+    latest:  bool,
+}
+
+fn is_unstable_ver(v: &str) -> bool {
+    let l = v.to_lowercase();
+    l.contains("beta") || l.contains("alpha") || l.contains("-rc") || l.contains(".rc")
+        || l.contains("pre") || l.contains("snapshot") || l.contains("-b.")
+}
+
+fn tag_latest(mut items: Vec<LoaderVersionInfo>) -> Vec<LoaderVersionInfo> {
+    if let Some(first_stable) = items.iter_mut().find(|i| i.stable) {
+        first_stable.latest = true;
+    }
+    items
+}
+
 #[tauri::command]
-async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<String>, String> {
+async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<LoaderVersionInfo>, String> {
     let client = reqwest::Client::builder()
         .user_agent("MLBV/1.0")
         .build()
@@ -736,18 +948,31 @@ async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<Strin
             let data: serde_json::Value = client.get(&url).send().await
                 .map_err(|e| e.to_string())?
                 .json().await.map_err(|e| e.to_string())?;
-            Ok(data.as_array().map(|arr| arr.iter()
-                .filter_map(|v| v["loader"]["version"].as_str().map(|s| s.to_string()))
-                .collect()).unwrap_or_default())
+            let items = data.as_array().map(|arr| arr.iter()
+                .filter_map(|v| {
+                    let version = v["loader"]["version"].as_str()?.to_string();
+                    let api_stable = v["loader"]["stable"].as_bool().unwrap_or(false);
+                    let stable  = api_stable || !is_unstable_ver(&version);
+                    Some(LoaderVersionInfo { version, stable, latest: false })
+                })
+                .collect::<Vec<_>>()
+            ).unwrap_or_default();
+            Ok(tag_latest(items))
         }
         "quilt" => {
             let url = format!("https://meta.quiltmc.org/v3/versions/loader/{}", mc_ver);
             let data: serde_json::Value = client.get(&url).send().await
                 .map_err(|e| e.to_string())?
                 .json().await.map_err(|e| e.to_string())?;
-            Ok(data.as_array().map(|arr| arr.iter()
-                .filter_map(|v| v["loader"]["version"].as_str().map(|s| s.to_string()))
-                .collect()).unwrap_or_default())
+            let items = data.as_array().map(|arr| arr.iter()
+                .filter_map(|v| {
+                    let version = v["loader"]["version"].as_str()?.to_string();
+                    let stable  = !is_unstable_ver(&version);
+                    Some(LoaderVersionInfo { version, stable, latest: false })
+                })
+                .collect::<Vec<_>>()
+            ).unwrap_or_default();
+            Ok(tag_latest(items))
         }
         "forge" => {
             let xml = client
@@ -755,7 +980,7 @@ async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<Strin
                 .send().await.map_err(|e| e.to_string())?
                 .text().await.map_err(|e| e.to_string())?;
             let prefix = format!("{}-", mc_ver);
-            let versions: Vec<String> = xml.lines()
+            let items: Vec<LoaderVersionInfo> = xml.lines()
                 .filter_map(|l| {
                     let l = l.trim();
                     if l.starts_with("<version>") && l.ends_with("</version>") {
@@ -763,8 +988,12 @@ async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<Strin
                     } else { None }
                 })
                 .filter(|v| v.starts_with(&prefix))
-                .rev().take(20).collect();
-            Ok(versions)
+                .map(|version| {
+                    let stable = !is_unstable_ver(&version);
+                    LoaderVersionInfo { version, stable, latest: false }
+                })
+                .rev().take(30).collect();
+            Ok(tag_latest(items))
         }
         "neoforge" => {
             let xml = client
@@ -777,7 +1006,7 @@ async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<Strin
                 [_, b] => format!("{}.", b),
                 _ => return Err(format!("Invalid MC version: {mc_ver}")),
             };
-            let versions: Vec<String> = xml.lines()
+            let items: Vec<LoaderVersionInfo> = xml.lines()
                 .filter_map(|l| {
                     let l = l.trim();
                     if l.starts_with("<version>") && l.ends_with("</version>") {
@@ -785,8 +1014,12 @@ async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<Strin
                     } else { None }
                 })
                 .filter(|v| v.starts_with(&prefix))
-                .rev().take(20).collect();
-            Ok(versions)
+                .map(|version| {
+                    let stable = !is_unstable_ver(&version);
+                    LoaderVersionInfo { version, stable, latest: false }
+                })
+                .rev().take(30).collect();
+            Ok(tag_latest(items))
         }
         _ => Err(format!("Unknown loader: {loader}")),
     }
@@ -807,6 +1040,44 @@ async fn launch_quilt_game(
 ) -> Result<(), String> {
     launcher::run_quilt(
         app, version_id, loader_version, instance_name, username, uuid, offline, access_token,
+        concurrent_downloads, max_ram_mb,
+    ).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn launch_forge_game(
+    app: tauri::AppHandle,
+    version_id: String,
+    forge_version: String,
+    instance_name: String,
+    username: String,
+    uuid: String,
+    offline: bool,
+    access_token: String,
+    concurrent_downloads: u32,
+    max_ram_mb: u32,
+) -> Result<(), String> {
+    launcher::run_forge(
+        app, version_id, forge_version, instance_name, username, uuid, offline, access_token,
+        concurrent_downloads, max_ram_mb,
+    ).await.map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn launch_neoforge_game(
+    app: tauri::AppHandle,
+    version_id: String,
+    neoforge_version: String,
+    instance_name: String,
+    username: String,
+    uuid: String,
+    offline: bool,
+    access_token: String,
+    concurrent_downloads: u32,
+    max_ram_mb: u32,
+) -> Result<(), String> {
+    launcher::run_neoforge(
+        app, version_id, neoforge_version, instance_name, username, uuid, offline, access_token,
         concurrent_downloads, max_ram_mb,
     ).await.map_err(|e| e.to_string())
 }
@@ -842,9 +1113,15 @@ pub fn run() {
             open_url,
             get_debug_info,
             get_window_type,
+            open_game_dir,
             open_console_window,
             get_console_info,
             poll_console,
+            poll_jvm_output,
+            install_lb_config,
+            get_lb_installable_instances,
+            scan_instances,
+            save_instance_metadata,
             list_mods,
             delete_mods,
             add_mod_file,
@@ -852,6 +1129,8 @@ pub fn run() {
             delete_instance_data,
             get_loader_versions,
             launch_quilt_game,
+            launch_forge_game,
+            launch_neoforge_game,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

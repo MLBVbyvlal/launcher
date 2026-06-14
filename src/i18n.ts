@@ -4,7 +4,7 @@ const S: Record<Lang, Record<string, string>> = {
   en: {
     // Setup — welcome
     'sw.welcome.title': 'Welcome to MLBV',
-    'sw.welcome.sub': 'Minecraft Launcher by vlal',
+    'sw.welcome.sub': 'Minecraft Launcher by vlalikoffc',
     'sw.welcome.choose': 'Choose your language to get started',
 
     // Setup — prefs
@@ -306,12 +306,46 @@ const S: Record<Lang, Record<string, string>> = {
     'delete_inst.from_disk': 'Delete from disk',
     'delete_inst.from_disk_desc': 'Permanently deletes all game files. This cannot be undone.',
     'delete_inst.confirm': 'Confirm',
+
+    // Stop game warning
+    'stop.warn.title': 'Stop the game?',
+    'stop.warn.body': 'The game will be forcefully terminated.\nUnsaved progress will be lost.',
+    'stop.warn.yes': 'Yes, stop',
+    'stop.warn.yes_cd': 'Yes, stop ({0}s)',
+    'stop.warn.no': 'No, cancel',
+
+    // Unstable loader version warning
+    'loader.unstable.title': 'Unstable version!',
+    'loader.unstable.body': '— is a beta/pre-release.\nMay have bugs, crashes and incompatibility.\nAre you sure?',
+    'loader.unstable.confirm': 'Yes, use it',
+    'loader.unstable.confirm_cd': 'Yes, use it ({0}s)',
+    'loader.unstable.cancel': 'AAA, CANCEL!!',
+    'loader.filter.releases': 'Releases',
+    'loader.filter.all': 'All',
+    'loader.no_releases': 'No releases for this Minecraft version',
+    'loader.beta_label': 'beta',
+
+    // Update modal — unstable warning
+    'update.unstable_warn': '⚠ Unstable version.',
+    'update.unstable_body': 'This is a beta or pre-release — may contain serious bugs and unstable behavior. We recommend waiting for a stable release.',
+
+    // LB Configs panel
+    'lb.back': '← Back',
+    'lb.loading': 'Loading…',
+    'lb.empty': 'No configs',
+    'lb.install': '↓ Install',
+    'lb.installing': 'Installing…',
+    'lb.no_lb_instances': 'No instances with LiquidBounce',
+    'lb.no_desc': 'No description',
+    'lb.installed_badge': '✓ Installed',
+    'lb.update_badge': '⬆ Update',
+    'lb.no_releases_mc': 'No releases for this MC version',
   },
 
   ru: {
     // Setup — welcome
     'sw.welcome.title': 'Добро пожаловать в MLBV',
-    'sw.welcome.sub': 'Minecraft Launcher by vlal',
+    'sw.welcome.sub': 'Minecraft Launcher by vlalikoffc',
     'sw.welcome.choose': 'Выберите язык для начала работы',
 
     // Setup — prefs
@@ -613,6 +647,40 @@ const S: Record<Lang, Record<string, string>> = {
     'delete_inst.from_disk': 'Удалить с диска',
     'delete_inst.from_disk_desc': 'Безвозвратно удаляет все файлы игры. Нельзя отменить.',
     'delete_inst.confirm': 'Подтвердить',
+
+    // Stop game warning
+    'stop.warn.title': 'Остановить игру?',
+    'stop.warn.body': 'Игра будет принудительно завершена.\nНесохранённый прогресс потеряется.',
+    'stop.warn.yes': 'Да, стоп',
+    'stop.warn.yes_cd': 'Да, стоп ({0}с)',
+    'stop.warn.no': 'Нет, отмена',
+
+    // Unstable loader version warning
+    'loader.unstable.title': 'Нестабильная версия!',
+    'loader.unstable.body': '— это бета/пре-релиз.\nМогут быть баги, крэши и несовместимость.\nТы уверен?',
+    'loader.unstable.confirm': 'Да, хочу',
+    'loader.unstable.confirm_cd': 'Да, хочу ({0}с)',
+    'loader.unstable.cancel': 'ААА, ОТМЕНА!!',
+    'loader.filter.releases': 'Релизы',
+    'loader.filter.all': 'Все',
+    'loader.no_releases': 'Нет релизов для этой версии MC',
+    'loader.beta_label': 'бета',
+
+    // Update modal — unstable warning
+    'update.unstable_warn': '⚠ Нестабильная версия.',
+    'update.unstable_body': 'Это бета или пре-релиз — может содержать серьёзные баги и нестабильное поведение. Рекомендуем дождаться стабильного релиза.',
+
+    // LB Configs panel
+    'lb.back': '← Назад',
+    'lb.loading': 'Загрузка…',
+    'lb.empty': 'Конфигов нет',
+    'lb.install': '↓ Установить',
+    'lb.installing': 'Устанавливаю…',
+    'lb.no_lb_instances': 'Нет инстансов с LiquidBounce',
+    'lb.no_desc': 'Нет описания',
+    'lb.installed_badge': '✓ Установлен',
+    'lb.update_badge': '⬆ Обновление',
+    'lb.no_releases_mc': 'Нет релизов для этой версии MC',
   },
 }
 
