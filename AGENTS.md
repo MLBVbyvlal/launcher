@@ -51,14 +51,17 @@ Facts about the current state:
 
 - Verify before claiming. Every statement about the code must be traceable to a file and line. If
   you did not run it, say "not verified" instead of implying you did.
+- **Re-verify anything you are not certain about.** A little doubt is a signal to check, not to
+  phrase more carefully. See §2.2 — a wrong claim costs far more than a slow answer.
+- **Treat this repository as public and permanent.** No secrets, no personal data, ever — see §2.1.
 - Keep changes minimal and scoped to the request. No drive-by reformatting, renaming or
   "while I was here" edits.
 - Use `cargo check --locked` and keep `Cargo.lock` / `package-lock.json` committed and in sync.
 - Write user-facing strings through `src/i18n.ts` in **both** `en` and `ru`.
 - Keep TypeScript strict-clean: `npm run build` runs `tsc` with `strict`, `noUnusedLocals` and
   `noUnusedParameters`. `any` is not used anywhere in the codebase; keep it that way.
-- Report honestly at the end: what you changed, what you verified and how, what you assumed, what
-  you could not check.
+- Report honestly at the end, labelling each claim: what you changed (with files), what you verified
+  and **how**, what you only reasoned about, and what you could not check at all.
 
 **Never**
 
@@ -79,6 +82,94 @@ Facts about the current state:
 - Never "fix" the LiquidBounce/cheat aspect of the project or add anything that circumvents
   Minecraft licensing or authentication. That is out of scope, permanently.
 - Never state that something "works" based on compilation alone. Compiling ≠ working.
+- Never commit a secret or anything personal — see §2.1. Never invent, guess at or embellish
+  evidence — see §2.2.
+
+### 2.1 This repository is public — no secrets, no personal data
+
+Every byte pushed here is public **permanently**. GitHub releases are mirrored, forked, cached and
+archived by third parties within minutes; deleting the file or rewriting history does not un-leak
+anything. There is no "I'll clean it up later". This applies to commits, workflow files, docs,
+screenshots, issue and PR text, and CI logs alike.
+
+Prohibited, without exception and without "it's only a test value":
+
+- Tokens and credentials of any kind: Microsoft/Minecraft access and refresh tokens, session IDs,
+  OAuth authorization codes, API keys, webhook URLs, SSH or GPG private keys, certificates,
+  `.netrc`, `credentials.json`, cookie jars, password manager exports.
+- `.env` files under any name — `.env`, `.env.local`, `.env.production`, secrets in `*.json` next
+  to config, `launcher_accounts.json`-style account stores.
+- Personal data: real Minecraft / Microsoft / Xbox nicknames, e-mail addresses, phone numbers,
+  real account UUIDs, IP addresses and server addresses, machine paths that contain the owner's
+  real name (`C:\Users\<real-name>\…`), chat logs, other people's files or screenshots.
+- Logs and dumps: `*.log`, crash reports, `latest.log`, JVM dumps, browser profiles — they contain
+  tokens, UUIDs and paths.
+- Anything whose ownership or licence you are unsure of.
+
+Practical rules:
+
+- **Screenshots are committed data that no `grep` can check.** Before adding any image or video,
+  open it and look for nicknames, avatars, UUIDs, file paths, console output, open tabs, server
+  addresses, notification popups. When in doubt, pixelate it or re-take it with a scratch profile.
+  The screenshots in `docs/screenshots/` were taken with deliberately fake accounts — keep that
+  practice: never take a screenshot for this repository while signed into a real account, and never
+  include a real nickname, avatar or UUID that you did not create for the purpose.
+- **Check `.gitignore` before generating artifacts, not after.** `node_modules/`, `dist/`,
+  `src-tauri/target/`, `src-tauri/gen/`, `*.exe`, `*.msi`, `*.log`, `.env*` are already covered; if
+  you produce something new, add a rule in the same change.
+- **Never paste secrets or personal data into issues, PR descriptions, commit messages or CI
+  output.** Redact as `<redacted>` and reference the source instead.
+- The bare `client_id = "00000000402b5328"` in `lib.rs` is Minecraft's public launcher client ID —
+  it is not a secret. Its presence is not a precedent: do not add any other identifier, and never
+  add a real application secret next to it.
+- **If something did leak: rotate or revoke the credential first**, then remove it from the working
+  tree, then tell the owner. Removing it from history is a separate, owner-approved step — never
+  rewrite `main`, and never force-push anything but your own working branch (§2). Assume anything
+  that was public for even a minute is compromised.
+- If you are unsure whether something counts as personal — **ask before pushing**. Asking costs one
+  message; leaking cannot be undone.
+
+### 2.2 Verification discipline — no guessing, no invented evidence
+
+Classify every factual claim you make by the strongest evidence you actually have:
+
+| Level | Evidence | How to phrase it |
+|---|---|---|
+| 1 | You ran it and read the output / the CI status yourself | "verified: <command> → <result>" |
+| 2 | You read it in the file | cite it, e.g. `src-tauri/src/lib.rs:438` |
+| 3 | Official documentation | cite the URL |
+| 4 | Inferred from 1–3 | "deduced from …, not observed directly" |
+| 5 | Memory, habit, "it's probably" | **not a claim** — verify or label as unverified |
+
+Non-negotiable:
+
+- **Not sure means re-verify, not re-wording.** If you cannot verify it (blocked network, no
+  toolchain, no access), say precisely what you could not check and why. "I could not verify this"
+  is a complete, acceptable answer. A confident guess is not.
+- **Never fabricate evidence.** No invented command output, no "CI is green" for a run you did not
+  look at, no log lines you did not read, no invented test results, metrics or quotes, no citing a
+  document you never opened. Fabricating or tampering with tool output is the worst possible
+  failure here — worse than doing nothing.
+- **Re-derive instead of trusting your own earlier statements**, including statements in this file.
+  Files get edited and line numbers drift; a fact that was true last session may be false now.
+  Re-check it before repeating it.
+- **Identifiers come from a source, every time.** Versions, hashes, sizes, field names, CLI flags,
+  permissions, defaults, paths: read them in the file or the official doc. "I believe the flag is
+  `--foo`" is not acceptable — find it, or say you could not.
+- **A compile is not behaviour.** `cargo check` and `npm run build` prove that things build. Only
+  running the app proves anything runs. Never write "works", "fixed", "solved" on the strength of a
+  green build; write "compiles" and say what remains unverified.
+- **Verify your own documentation edits.** Line numbers, paths, commands and versions you just wrote
+  are the most likely thing in your change to be wrong — re-open the target and confirm each one
+  right before committing. This is cheap and it is skipped constantly.
+- **Prefer primary sources, and two of them for protocol facts.** Minecraft JSON shape, loader APIs,
+  OAuth endpoints, Tauri permissions: check the official documentation or the real endpoint.
+  Forum and blog posts are a lead, not proof — mark them as such.
+- **Never present a plan or an intention as a completed action.** If you are about to do something,
+  say "next I will…", not "I did…".
+- **When you turn out to be wrong, say so in plain words** and fix it in the same change — including
+  the report, and including this file if this file is what was wrong. A silently corrected mistake
+  is still a mistake the user will trust next time.
 
 ## 3. Before you change anything
 
@@ -257,9 +348,15 @@ quote the documentation. "I believe the field is called …" is not acceptable.
 - [ ] If a command name, invocation argument or data path changed, frontend and backend were both
       updated and both were grepped for the old name.
 - [ ] Docs updated when behaviour, paths, or limitations changed (`README.md`, this file).
-- [ ] Report states: what changed (with files), what was verified and how, what was not verified,
-      and any assumption made.
+- [ ] Nothing secret or personal added: no tokens, keys, `.env`, real nicknames, e-mails, real
+      paths, unreviewed screenshots or log files (§2.1). Re-check with a grep, and open any image.
+- [ ] Every `file:line`, path, command, version and flag touched by the change was re-verified
+      against the real file **after** editing it (§2.2).
+- [ ] The report labels each statement: verified (with the command or source), deduced, or
+      not verified — and names anything you could not check.
 
 ---
 
 If something in this file turns out to be wrong, fix the file in the same change and say so.
+The same goes for anything an agent recorded here from a previous session: this file is a claim like
+any other, and claims get re-verified.

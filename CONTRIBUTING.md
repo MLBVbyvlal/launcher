@@ -13,8 +13,12 @@ active development. There are no maintainer SLAs: issues and pull requests may s
 long time, and changes are accepted on a best-effort basis. That is not a reason not to contribute —
 just calibrate your expectations, and prefer small, self-contained changes over large refactors.
 
-If you are an **AI agent**: do not open a pull request, push to `main`, or post comments unless the
-person you are working for explicitly asked for that specific action in that specific request.
+If you are an **AI agent**: read [`AGENTS.md`](AGENTS.md) in full before doing anything here — it
+defines the workflow, the verification duties and the prohibited actions. In particular: do not open
+a pull request, push to `main`, or post comments unless the person you are working for explicitly
+asked for that specific action in that specific request; never fabricate evidence (invented command
+output, unread logs, a status you did not check); re-verify anything you are not certain about
+instead of guessing; and never commit a secret or personal data (see *Secrets and personal data*).
 
 ## Requirements
 
@@ -137,6 +141,33 @@ Do not bump the version, create a tag, or publish a release unless the maintaine
 5. Releases have been published as pre-releases so far. Keep the convention consistent, and if you
    change it, update `check_for_update`'s expectations and `README.md` together.
 
+## Secrets and personal data
+
+This repository is **public**, and everything pushed here is public permanently — forks, mirrors and
+archives keep copies within minutes, so deleting a file or rewriting history does not un-leak it.
+
+Never commit:
+
+- tokens, session IDs, OAuth authorization codes, API keys, SSH/GPG private keys, certificates,
+  `.netrc`, cookie jars, password stores;
+- `.env` files under any name, or secret-bearing JSON sitting next to config;
+- personal data: real Minecraft/Microsoft/Xbox nicknames, e-mail addresses, phone numbers, real
+  account UUIDs, IP addresses and server addresses, paths containing your real name, chat logs,
+  other people's files;
+- `*.log`, crash reports and JVM dumps — they carry tokens, UUIDs and local paths.
+
+Screenshots are committed data that no `grep` can check. Open every image before adding it and look
+for nicknames, avatars, UUIDs, file paths, console output, server addresses and OS notifications. Use
+a scratch profile with deliberately fake accounts — that is what the screenshots in
+`docs/screenshots/` are — or pixelate the details. The same applies to screen recordings.
+
+If something did leak: **rotate or revoke the credential first**, then remove it from the working tree
+and tell the maintainer. Never rewrite `main` and never force-push shared history.
+
+Not a secret: the bare `client_id = "00000000402b5328"` in `src-tauri/src/lib.rs` is Minecraft's
+public launcher client ID. Its presence is not a precedent — do not add any other identifier, and
+never add a real application secret next to it.
+
 ## Reporting bugs
 
 A useful report includes:
@@ -159,6 +190,8 @@ read that section before filing.
 - Do not add telemetry, analytics, or any new outbound endpoint without documenting it in the
   *External services* table in `README.md`.
 - Anything touching accounts, tokens or the Windows registry needs an explicit discussion first.
+- Never add code that writes credentials to disk in plain text or sends them anywhere other than the
+  auth chain documented in *External services* in `README.md`.
 
 ## License
 
