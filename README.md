@@ -205,8 +205,9 @@ Verified against the code, not guessed:
    pre-release are shown with a warning. Check failures are no longer swallowed silently — they are
    shown in Settings → About.
 2. **One launch at a time.** Several instances can run side by side, but the download queue and its
-   progress/speed events are global, so a second *launch* waits until the first one has started.
-   There is also a single console window: opening it for another instance closes the previous one.
+   progress/speed events are global, so a second *launch* is refused ("Another game is launching")
+   until the first one has started. There is also a single console window: opening it for another
+   instance closes the previous one.
 3. **No tests and no linter.** CI compiles the project; it does not verify behaviour.
 4. **Instance recovery is name-based.** If a `.mlbv-instance.json` metadata file is missing or
    corrupt, a recovered instance falls back to a filesystem guess (LiquidBounce instances lose their

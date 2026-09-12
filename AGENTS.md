@@ -20,8 +20,8 @@ self-update check.
 Facts about the current state:
 
 - **Status: frozen.** Last *release*: `beta0.0.4`, dated 2026-06-14. No feature development;
-  maintenance fixes (security, data integrity, broken updater) were applied on 2026-09-12 —
-  see §6 for what was fixed and what is still open.
+  maintenance fixes (security, data integrity, broken updater) and the launch-pipeline
+  consolidation were applied on 2026-09-12 — see §6 for what was fixed and what is still open.
 - History is squashed and unhelpful (original sprint: 15 commits over two days).
 - ~9 600 lines of first-party code: ~3 400 Rust, ~6 200 TypeScript/CSS
   (measured 2026-09-12 after the launch-pipeline consolidation).
@@ -222,7 +222,12 @@ npm run tauri dev  # real desktop app with hot reload
   repositories and container registries may be blocked too. Check what is reachable
   (`curl -s -o /dev/null -w '%{http_code}' <url>`) before promising a build.
 - **CI is the reliable compiler.** Push the workflow to a working branch and let GitHub run
-  `cargo check` and the Windows installer build. Read statuses with
+  `cargo check` and the Windows installer build. When `cargo check` fails, the rust-check job
+  re-emits every compiler diagnostic as a check-run annotation (`Surface compiler errors as
+  annotations` step), so the errors are readable without the log:
+  `gh api repos/<owner>/<repo>/check-runs/<job_id>/annotations --paginate
+  --jq '.[] | "\(.path):\(.start_line) \(.message)"'`.
+  Read statuses with
   `gh run view <id> --json jobs --jq '.jobs[] | "\(.name) \(.conclusion)"'` and per-step detail with
   `gh api repos/<owner>/<repo>/actions/jobs/<job_id> --jq '.steps[] | "\(.conclusion) \(.name)"'`.
   Log bytes and artifacts are served from `*.blob.core.windows.net`, which restricted sandboxes
@@ -295,8 +300,11 @@ not accidentally "re-fixed" into a regression.
    came with it** (deliberate, and not runtime-verified — see the caveat below): the client JAR and
    version JSON are shared-only (no per-instance copy), natives are extracted per instance
    (`instances/<name>/natives/`, as in PrismLauncher), progress percentages are one schedule for
-   all loaders, Fabric/Quilt overlay `arguments.game` are applied instead of ignored, and
-   conditional (rule-bearing) loader JVM args are honoured for Fabric/Quilt too.
+   all loaders, and conditional (rule-bearing) loader JVM args are now honoured for Fabric/Quilt
+   too (previously only plain strings were pushed). **Still not parsed:** `arguments.game` in a
+   Fabric/Quilt profile — `FabricArguments` only reads `jvm`, exactly as before the consolidation.
+   Adding it is a two-line change, but neither loader API was reachable from the sandbox to
+   confirm the shape, so it was left alone rather than guessed at.
 8. **FIXED 2026-09-12 — legacy assets.** `AssetIndex` now parses `map_to_resources`, and
    `map_legacy_assets` (called from `download_assets_parallel`) hard-links each object into
    `assets/virtual/legacy/<index key>` for pre-1.7.3 indexes. `assetIndex`/`downloads` in
