@@ -313,9 +313,8 @@ body { background: #060b14; }
 .stop-btn.lb-stop { /* identical */ }
 .stop-icon { font-size:13px; }
 /* Other-tab-running info bar */
-.other-running-wrap { opacity:0.8; }
-.other-running-label { display:flex;align-items:center;gap:8px;justify-content:center;color:var(--text-secondary); }
-.other-running-icon { font-size:9px;opacity:0.55; }
+/* Inline note in the hero hint: another instance is running */
+.other-running-label { color:var(--text-secondary); opacity:0.85; }
 
 /* ── TAB CONTENT ── */
 .tab-content { display:flex;flex-direction:column;flex:1;min-height:0; }
