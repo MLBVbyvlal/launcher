@@ -98,9 +98,11 @@ src/i18n.ts                EN/RU strings
 - Never leave a fallible operation silently discarded: `let _ = ...` around downloads and file
   writes is a known source of "the game crashed and nothing explained why". If an error is
   genuinely ignorable, comment why.
-- Beware the six duplicated launch pipelines (`run`, `run_lb`, `run_fabric`, `run_quilt`,
-  `run_forge`, `run_neoforge`). If your change affects launching, state explicitly which pipelines
-  you touched and which you did not — or ask the maintainer before consolidating them.
+- Launching is one pipeline (`launcher::launch`) with loader steps around it. A change in `launch`,
+  `download_vanilla_libraries`, `download_assets`, `build_launch_args` or `spawn_game` affects
+  **every** loader; a change in `prepare_loader`, `prepare_loader_stage`,
+  `download_profile_libraries`, `download_overlay_libraries` or `download_lb_mods` affects one
+  loader only. Say which one you meant in the PR description.
 
 **Comments and sections**
 
