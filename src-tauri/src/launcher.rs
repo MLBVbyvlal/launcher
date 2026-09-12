@@ -199,7 +199,8 @@ fn jvm_push(buf: &Mutex<Vec<String>>, line: String) {
     let mut lines = buf.lock().unwrap();
     lines.push(line);
     if lines.len() > JVM_LINES_CAP {
-        lines.drain(..lines.len() - JVM_LINES_CAP);
+        let excess = lines.len() - JVM_LINES_CAP;
+        lines.drain(..excess);
     }
 }
 
@@ -2828,6 +2829,7 @@ async fn download_file(
     expected_sha1: Option<&str>,
     bytes_dl: Option<&AtomicU64>,
 ) -> Result<()> {
+    use sha1::Digest;
     use std::io::Write;
 
     let resp = client.get(url).send().await?
