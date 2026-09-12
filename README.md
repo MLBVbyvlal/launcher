@@ -1,133 +1,249 @@
 # MLBV — Minecraft Launcher
 
-A custom Minecraft launcher built with Tauri (Rust + React). Supports vanilla Minecraft and has LiquidBounce built in as a first-class option.
+[![CI](https://github.com/MLBVbyvlal/launcher/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/MLBVbyvlal/launcher/actions/workflows/ci.yml)
+[![License: GPL-3.0-or-later](https://img.shields.io/badge/license-GPL--3.0--or--later-blue.svg)](LICENSE)
+[![Release](https://img.shields.io/github/v/release/MLBVbyvlal/launcher?include_prereleases&label=release)](https://github.com/MLBVbyvlal/launcher/releases)
+[![Platform](https://img.shields.io/badge/platform-Windows-0078D6.svg)](#requirements)
+[![Stack](https://img.shields.io/badge/stack-Tauri%202%20%C2%B7%20Rust%20%C2%B7%20React%2019-24C8DB.svg)](#architecture)
+
+> [!IMPORTANT]
+> **AI agents: read [`AGENTS.md`](AGENTS.md) before doing anything in this repository.**
+> It defines the required workflow, the build/verify commands, the conventions, and a list of
+> known landmines in the code. Do not start work without it. Contributions are covered by
+> [`CONTRIBUTING.md`](CONTRIBUTING.md).
+
+MLBV is a custom Minecraft launcher for Windows: a Tauri 2 app with a Rust backend and a React 19
+frontend. It handles what the official launcher does — accounts, versions, assets, libraries, Java —
+plus per-instance isolation, five mod loaders, and LiquidBounce as a first-class option.
+
+**Status: frozen beta.** The last commit and release are from **14 June 2026** (`beta0.0.4`).
+There is no active development. The code is published as-is; see [Known limitations](#known-limitations)
+for a verified list of what does not work. Issues and pull requests may go unanswered.
 
 ---
 
-## Screenshots
+## Contents
 
-**First launch — language selection and setup wizard**
-
-![Setup wizard](docs/screenshots/setup-wizard.png)
-
-**Account setup — Microsoft or offline guest**
-
-![Account setup](docs/screenshots/account-setup.png)
-
-**LiquidBounce built in — no extra steps**
-
-![LiquidBounce](docs/screenshots/lb-builtin.png)
-
-**Main interface**
-
-![Main UI](docs/screenshots/main-ui.png)
-
-**Settings panel**
-
-![Settings](docs/screenshots/settings-about.png)
+- [What it does](#what-it-does)
+- [Requirements](#requirements)
+- [Install](#install)
+- [Build from source](#build-from-source)
+- [Where data lives](#where-data-lives)
+- [Architecture](#architecture)
+- [External services](#external-services)
+- [Known limitations](#known-limitations)
+- [Screenshots](#screenshots)
+- [Contributing](#contributing)
+- [License and disclaimer](#license-and-disclaimer)
 
 ---
 
 ## What it does
 
-MLBV manages everything the official Minecraft launcher does, but with a cleaner interface and direct LiquidBounce support. You pick a version, pick an account, press Play. The launcher handles downloading Java, game files, assets, and libraries automatically.
-
 ### Accounts
-
-- Microsoft login via OAuth — a popup opens, you sign in normally, the launcher intercepts the redirect. No credentials are stored in files or sent anywhere else.
-- Offline/guest accounts for servers that don't require authentication.
-- Multiple accounts supported, switch between them without re-logging in.
+- **Microsoft** login through the real OAuth flow: an embedded WebView opens, you sign in normally,
+  the redirect is intercepted inside the app. No credentials are stored, nothing is proxied.
+- **Offline / guest** accounts for servers that do not require authentication.
+- Multiple accounts, switch between them without re-authenticating.
 
 ### Instances
-
-- Create as many instances as you want — each one is isolated from the others.
-- Supports any Minecraft release, snapshot, old beta, or old alpha.
-- Each instance has its own mods, configs, saves, resource packs, and options.
-- Per-instance RAM override on top of the global default.
+- Unlimited instances; each one is a separate game directory with its own mods, configs, saves,
+  resource packs and `options.txt`.
+- Any Minecraft release or snapshot, plus mod loaders selected in a two-step picker:
+  **Vanilla, Fabric, Quilt, Forge, NeoForge** — with a version list pulled from each loader's API,
+  an installed/latest marker, and a warning for beta/alpha/RC builds.
+- Per-instance RAM override on top of the global setting.
+- Right-click menu: rename, settings, reinstall, delete. Reinstall can wipe only mods and configs
+  and keep saves/screenshots, or do a full wipe.
+- Built-in **mods tab**: list, add from file, delete, open the mods folder.
 
 ### Java
-
-- Detects Java installations already on your machine.
-- Downloads the right version automatically from adoptium.net if it's missing — Java 8 for 1.16.5 and below, Java 17 for 1.17–1.20.4, Java 21 for 1.20.5+, Java 25 for future versions.
-- Never touches or modifies an existing Java install.
+- Detects JREs the launcher installed itself, Minecraft's own `runtime/`, `JAVA_HOME`, the usual
+  Windows install locations, and — as a last resort — `java` on `PATH`.
+- Versions managed by MLBV are matched **exactly** (Java 21 stays Java 21, it will not silently
+  pick up Java 25), while system installs are accepted when they are at least the required version.
+- Missing runtimes are downloaded from Eclipse Adoptium (Temurin): Java 8 for ≤ 1.16.5, 17 for
+  1.17–1.20.4, 21 for 1.20.5+, 25 for newer. An existing Java install is never modified.
 
 ### Downloads
+- Parallel asset downloads, configurable from 1 to 50 connections.
+- Live speed readout, pause/resume mid-download, cancel.
+- Progress is reported per stage (client JAR, libraries, assets, Java, launch).
+- Shared cache: libraries, assets and version JARs are downloaded once and reused across instances.
 
-- Configurable parallel downloads (1–50 connections).
-- Live speed readout updated every second — shown in B/s, KB/s, or MB/s.
-- Pause and resume mid-download without losing progress.
-- Cancel at any time and start fresh.
-
-### LiquidBounce integration
-
-LiquidBounce is a free, open-source utility mod for Minecraft. MLBV integrates it directly — pick a branch (nextgen or legacy) and a version, and the launcher downloads and sets everything up through the official LiquidBounce API. No manual Fabric installation, no copying jars around.
-
-> MLBV is an independent project and is not affiliated with, sponsored by, or endorsed by the LiquidBounce team or CCBlueX.
-
-### Auto-updates
-
-On every startup the launcher checks the GitHub Releases page for a newer version. If one exists, a small popup shows the release notes with a link to the download page. There is no silent auto-install — you decide when to update. You can also trigger a manual check from Settings > About at any time.
+### LiquidBounce
+- Branches and builds are fetched from the official LiquidBounce API; you pick a branch and a
+  version, and the launcher downloads vanilla, Fabric Loader, the mod set and the game config.
+- A **configs catalog** browses [MLBVbyvlal/lbconfig](https://github.com/MLBVbyvlal/lbconfig)
+  in-app: preview image, author, tags, README rendered as Markdown, favourites, installed markers,
+  and one-click install into a chosen instance.
 
 ### Everything else
-
-- First-run setup wizard with language selection (English and Russian).
-- Crash dialog with the last 30 lines of the game log when the game exits unexpectedly.
-- Instance settings with log viewer and per-instance RAM override.
-- Right-click context menu on any instance — rename, settings, reinstall, delete.
-- Reinstall mode: wipe just the mods and configs while keeping saves and screenshots, or full wipe if you want to start clean.
-- Collapsible sidebar.
-- Swipe left/right between Minecraft and LiquidBounce tabs (touch/trackpad).
-- Hide launcher when game starts (optional, in settings).
+- First-run setup wizard: language → preferences → account → Java provisioning.
+- Separate always-on-top **console window** streaming live game output.
+- Crash dialog with the last 80 lines of output when the game exits with a non-zero code.
+- Accent colour theming (8 presets + custom hex), collapsible sidebar, swipe between the Minecraft
+  and LiquidBounce tabs, hide-launcher-on-launch.
+- English and Russian UI (514 translation keys).
 
 ---
 
-## Data storage
+## Requirements
 
-All launcher data is stored in `%APPDATA%\mlbv\` on Windows or `~/.mlbv/` on Linux. Nothing is written to the project folder or to the standard `.minecraft` directory — they stay completely separate. Shared libraries and assets go into `mlbv\shared\`, and each instance's saves, mods, and options live in `mlbv\instances\{name}\`.
+**To run the built app:** Windows 10/11 x64 with WebView2 (present by default on current Windows).
 
-Account tokens are stored in the WebView's localStorage (`%APPDATA%\com.vlalikoffc.mlbv\` on Windows). This is per-machine and is never synced, exported, or included in any build output.
+**To build it:**
+
+| Tool | Version |
+|---|---|
+| Node.js | 18+ (22 recommended; CI uses 22) |
+| Rust | stable toolchain (edition 2021) |
+| Tauri prerequisites | WebView2 + Visual Studio C++ Build Tools on Windows; see [Tauri prerequisites](https://tauri.app/start/prerequisites/) for Linux/macOS |
 
 ---
 
-## Download
+## Install
 
-Get the latest installer from the [Releases](https://github.com/MLBVbyvlalikoffc/launcher/releases) page.
+Grab the latest installer from the [Releases](https://github.com/MLBVbyvlal/launcher/releases) page —
+`MLBV_0.0.4_x64-setup.exe` (NSIS) or `MLBV_0.0.4_x64_en-US.msi`. Only Windows builds are published.
 
----
+## Build from source
 
-## Building from source
-
-Requirements: [Rust](https://rustup.rs), [Node.js](https://nodejs.org) 18+, and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS (on Windows this is WebView2 and the VS C++ build tools — both usually already present).
-
-```sh
-git clone https://github.com/MLBVbyvlalikoffc/launcher.git
+```bash
+git clone https://github.com/MLBVbyvlal/launcher.git
 cd launcher
-npm install
-cargo tauri build
+npm ci
 ```
 
-Output will be in `src-tauri/target/release/bundle/` — an NSIS installer and an MSI on Windows.
+| Command | What it does |
+|---|---|
+| `npm run dev` | Vite dev server on port 1420 — **UI only**, in a browser. Every Tauri command fails there; use it for layout work only. |
+| `npm run tauri dev` | Full desktop app with hot reload. |
+| `npm run build` | `tsc` + `vite build` → `dist/` (this is what `tauri build` consumes). |
+| `npm run tauri build` | Release build + installers in `src-tauri/target/release/bundle/`. |
+| `cd src-tauri && cargo check` | Compile-check the Rust backend without producing binaries. |
 
-For development with hot reload:
+On Windows, `run.bat` wraps `npm run tauri dev` and checks that Node and Cargo are on `PATH`.
+The first Rust build takes 5–15 minutes; later ones are much faster.
 
-```sh
-cargo tauri dev
+CI runs all three of the above on every push: type-check and bundle, `cargo check --locked
+--all-targets`, and a full Windows installer build. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+
+## Where data lives
+
+Nothing is written to the repository, and the official `.minecraft` folder is not used as a game
+directory. The launcher keeps its own tree:
+
+| Path | Contents |
+|---|---|
+| `%APPDATA%\mlbv\` (Windows) · `~/.mlbv/` (Linux/macOS) | Everything below |
+| `mlbv\shared\assets\` | Asset objects and indexes, shared by all instances |
+| `mlbv\shared\libraries\` | Maven libraries, shared by all instances |
+| `mlbv\shared\versions\` | Version JSONs and client JARs |
+| `mlbv\shared\java\jre-{N}\` | Java runtimes installed by the launcher |
+| `mlbv\instances\{name}\` | The game directory of one instance (mods, configs, saves, logs) |
+
+Accounts, tokens and the instance list are stored in the WebView's `localStorage`
+(`%APPDATA%\com.vlal.mlbv\` on Windows). They are per-machine, never synced or exported — and,
+because of that, a project folder copied to another machine will not appear in the launcher until
+it is re-created by hand. See [Known limitations](#known-limitations).
+
+## Architecture
+
+```
+src-tauri/
+  src/main.rs       Windows entry point (windows_subsystem attribute — keep it)
+  src/lib.rs        Tauri commands: Microsoft auth, LiquidBounce API, update check,
+                    console window, instance scanning, mods, download controls
+  src/launcher.rs   Launch pipelines for vanilla / LiquidBounce / Fabric / Quilt /
+                    Forge / NeoForge, Java provisioning, ZIP extraction, helpers
+  tauri.conf.json   Window config, bundle targets, identifier (com.vlal.mlbv)
+  capabilities/     Tauri v2 permission sets for the main and console windows
+src/
+  App.tsx           Main UI — every modal lives in this file
+  SetupWizard.tsx   First-run wizard
+  ConsoleWindow.tsx Separate console window (loads the same bundle, routed in main.tsx)
+  LbConfigsPanel.tsx LiquidBounce configs catalog
+  i18n.ts           English/Russian strings
+  App.css           All styling
 ```
 
----
+The frontend decides which window it is at runtime: `main.tsx` calls `get_window_type` and renders
+`App` or `ConsoleWindow` accordingly. Window labels are `main` and `console`.
 
-## Tech stack
+## External services
 
-- [Tauri v2](https://tauri.app) — Rust backend, WebView2 frontend
-- React 19 + TypeScript + Vite
-- Framer Motion for animations
-- reqwest for all HTTP from Rust
-- [LiquidBounce API](https://api.liquidbounce.net) for version discovery and mod manifests
+The launcher talks to these endpoints directly. None of them are proxied through a server of ours.
 
----
+| Service | Used for |
+|---|---|
+| `launchermeta.mojang.com`, `resources.download.minecraft.net` | Version manifest, version JSON, client JAR, assets |
+| `login.live.com`, `user.auth.xboxlive.com`, `xsts.auth.xboxlive.com`, `api.minecraftservices.com` | Microsoft → Xbox Live → Minecraft auth chain |
+| `api.adoptium.net` | Temurin JRE downloads |
+| `meta.fabricmc.net`, `meta.quiltmc.org`, `maven.quiltmc.org`, `maven.fabricmc.net` | Fabric/Quilt loader versions and libraries |
+| `maven.minecraftforge.net`, `maven.neoforged.net` | Forge/NeoForge installers and loader versions |
+| `api.modrinth.com` | Fabric API and extra mods (Sodium, Iris, Lithium, Mod Menu, ViaFabricPlus…) |
+| `api.liquidbounce.net` | LiquidBounce branches, builds, launch manifests, mod files |
+| `api.github.com`, `raw.githubusercontent.com` | Update check and the `lbconfig` catalog |
+| `mc-heads.net` | Account avatar in the UI |
 
-## License
+## Known limitations
 
-This project is licensed under the GNU General Public License v3.0 — see [LICENSE](LICENSE) for the full text.
+Verified against the code, not guessed:
 
-In short: free to use, modify, and distribute. Derivative works must also be open source under the same license. You must credit the original author (vlalikoffc).
+1. **Microsoft sessions expire and cannot be refreshed.** `refresh_token` is obtained from the auth
+   chain and passed to the frontend, which drops it; there is no refresh call anywhere. Expect to
+   sign in again roughly every 24 hours, after which multiplayer reports an invalid session.
+2. **The instance list lives only in `localStorage`.** `scan_instances` and `save_instance_metadata`
+   exist in Rust but are never called, and `.mlbv-instance.json` is never written. If WebView data
+   is cleared, the launcher shows an empty list while the gigabytes stay on disk.
+3. **Downloads are not checksum-verified and are buffered in memory.** SHA-1 values from the
+   manifests are ignored, so a truncated file is only re-downloaded when its size differs; some
+   download errors inside library loops are swallowed, which can surface later as a game crash.
+4. **Legacy assets are not mapped.** For versions before 1.7 (asset index `legacy` / `pre-1.6`) the
+   launcher downloads objects but never copies them into `assets/virtual/legacy/`, so old versions
+   may start without textures and sounds.
+5. **Auto-update is Windows-only** (NSIS silent install `/S /D=`), and in `beta0.0.4` it can never
+   find an update: the running version string parses as a *release*, while every published GitHub
+   release is marked as a *pre-release*, so the check is filtered down to nothing and the error is
+   swallowed by the UI.
+6. **One game process at a time.** The backend keeps a single `child` slot, so launching a second
+   instance stops tracking the first.
+7. **No tests and no linter.** CI compiles the project; it does not verify behaviour.
+8. **Reinstall / delete operate on the instance name from `localStorage`** with no validation, and
+   the app ships with `csp: null` and renders third-party Markdown through `dangerouslySetInnerHTML`.
+   Do not point this build at untrusted catalogs.
+
+## Screenshots
+
+<details>
+<summary>Click to expand</summary>
+
+| Setup wizard | Accounts |
+|---|---|
+| ![Setup wizard](docs/screenshots/setup-wizard.png) | ![Account setup](docs/screenshots/account-setup.png) |
+
+| Main interface | Settings |
+|---|---|
+| ![Main UI](docs/screenshots/main-ui.png) | ![Settings](docs/screenshots/settings-about.png) |
+
+![LiquidBounce built in](docs/screenshots/lb-builtin.png)
+
+</details>
+
+## Contributing
+
+Read [`AGENTS.md`](AGENTS.md) first (required if you are an AI agent) and
+[`CONTRIBUTING.md`](CONTRIBUTING.md) for setup, conventions, the version-bump checklist and the
+release process. Two things worth knowing before you start:
+
+- The project is frozen; changes are accepted on a best-effort basis.
+- Never open a pull request on someone else's behalf without being asked to.
+
+## License and disclaimer
+
+GPL-3.0-or-later — see [`LICENSE`](LICENSE). Copyright © 2026 vlalikoffc.
+
+MLBV is an independent project. It is **not affiliated with, sponsored by or endorsed by** the
+LiquidBounce team or CCBlueX, nor by Mojang Studios or Microsoft. Minecraft is a trademark of
+Mojang Studios; you need a legitimate Minecraft account to play online.
