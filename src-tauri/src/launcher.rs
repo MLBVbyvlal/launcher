@@ -568,7 +568,7 @@ pub async fn launch(app: tauri::AppHandle, req: LaunchRequest) -> Result<()> {
     if !is_valid_file(&jar_path, ver.downloads.client.size) {
         progress(&app, "download", PCT_JAR, "Downloading Minecraft client…");
         download_file(&client, &ver.downloads.client.url, &jar_path,
-            ver.downloads.client.size, Some(&ver.downloads.client.sha1), Some(&bytes)).await
+            ver.downloads.client.size, Some(&ver.downloads.client.sha1), Some(&ctx.bytes)).await
             .context("Failed to download Minecraft client")?;
     }
 
@@ -1522,7 +1522,8 @@ fn watch_exit(app: tauri::AppHandle, instance: String, game_dir: PathBuf) {
             // Keep a tail for the console window, drop the rest of the buffer.
             {
                 let state = app.state::<GameState>();
-                if let Some(buf) = state.jvm_buffers.lock().unwrap().get(&instance) {
+                let buffers = state.jvm_buffers.lock().unwrap();
+                if let Some(buf) = buffers.get(&instance) {
                     let mut lines = buf.lock().unwrap();
                     let excess = lines.len().saturating_sub(JVM_TAIL_AFTER_EXIT);
                     if excess > 0 { lines.drain(..excess); }
