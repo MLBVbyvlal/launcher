@@ -160,6 +160,10 @@ pub struct JavaVersionReq {
 #[derive(Deserialize)]
 struct AssetIndex {
     objects: HashMap<String, AssetObj>,
+    // True for pre-1.7.3 indexes: every object must also be reachable at
+    // assets/virtual/legacy/<index key>, or old versions start without textures.
+    #[serde(rename = "map_to_resources", default)]
+    map_to_resources: bool,
 }
 
 #[derive(Deserialize)]
@@ -183,6 +187,53 @@ fn progress(app: &tauri::AppHandle, stage: &str, pct: f32, msg: &str) {
         progress: pct,
         message: msg.into(),
     });
+}
+
+// ─── JVM output buffer ────────────────────────────────────────────────────────
+
+/// Bounded buffer for live JVM output. Long sessions would otherwise grow
+/// `jvm_lines` without limit; the full history always stays in latest.log.
+const JVM_LINES_CAP: usize = 20_000;
+
+fn jvm_push(buf: &Mutex<Vec<String>>, line: String) {
+    let mut lines = buf.lock().unwrap();
+    lines.push(line);
+    if lines.len() > JVM_LINES_CAP {
+        let excess = lines.len() - JVM_LINES_CAP;
+        lines.drain(..excess);
+    }
+}
+
+// ─── Instance name validation ─────────────────────────────────────────────────
+
+/// Whitelist-check an instance name before it is used as a path segment.
+/// Instance names come from the frontend (localStorage) and reach
+/// `join()` + `remove_dir_all` in several commands — an unvalidated name
+/// could escape the instances dir (`../../`) or name a Windows device.
+pub fn valid_instance_name(name: &str) -> Result<()> {
+    if name.is_empty() || name.len() > 64 {
+        return Err(anyhow!("Invalid instance name (length 1–64)"));
+    }
+    if name.contains('/') || name.contains('\\') || name.contains(':') || name.contains('\0') {
+        return Err(anyhow!("Invalid instance name (forbidden characters)"));
+    }
+    if !name.chars().all(|c| c.is_ascii_alphanumeric() || matches!(c, ' ' | '_' | '-' | '.' | '+')) {
+        return Err(anyhow!("Invalid instance name (allowed: letters, digits, space, _ - . +)"));
+    }
+    if name.starts_with('.') || name == "." || name == ".." || name.ends_with('.') || name.ends_with(' ') {
+        return Err(anyhow!("Invalid instance name (bad start/end character)"));
+    }
+    // Windows reserved device names are reserved as the final path component.
+    let base = name.trim_end_matches(['.', ' ']).to_ascii_uppercase();
+    const RESERVED: [&str; 17] = [
+        "CON", "PRN", "AUX", "NUL",
+        "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
+        "LPT1", "LPT2", "LPT3", "LPT4",
+    ];
+    if RESERVED.contains(&base.as_str()) {
+        return Err(anyhow!("Invalid instance name (Windows reserved name)"));
+    }
+    Ok(())
 }
 
 // ─── Instance dir ─────────────────────────────────────────────────────────────
@@ -218,9 +269,13 @@ async fn download_assets_parallel(
     cancel: Arc<AtomicBool>,
     pause: Arc<AtomicBool>,
     bytes_dl: Arc<AtomicU64>,
-) {
+    map_to_resources: bool,
+) -> Result<()> {
     let total = objects.len();
-    if total == 0 { return; }
+    if total == 0 {
+        if map_to_resources { map_legacy_assets(objects, objs_dir)?; }
+        return Ok(());
+    }
     let sem  = Arc::new(Semaphore::new(concurrent.max(1) as usize));
     let done = Arc::new(AtomicUsize::new(0));
     let mut set = tokio::task::JoinSet::<()>::new();
@@ -252,12 +307,9 @@ async fn download_assets_parallel(
                     "https://resources.download.minecraft.net/{}/{}",
                     prefix, hash
                 );
-                if let Ok(resp) = client_c.get(&url).send().await {
-                    if let Ok(body) = resp.bytes().await {
-                        bytes_c.fetch_add(body.len() as u64, Ordering::Relaxed);
-                        let _ = fs::write(&obj_path, body);
-                    }
-                }
+                // Best-effort per asset: a single failed object means one
+                // missing texture, not a broken launch.
+                let _ = download_file(&client_c, &url, &obj_path, size, Some(&hash), Some(&bytes_c)).await;
             }
             let n = done_c.fetch_add(1, Ordering::Relaxed) + 1;
             if n % 50 == 0 || n == total {
@@ -267,6 +319,10 @@ async fn download_assets_parallel(
         });
     }
     while set.join_next().await.is_some() {}
+    if map_to_resources {
+        map_legacy_assets(objects, objs_dir).context("Mapping legacy assets")?;
+    }
+    Ok(())
 }
 
 pub async fn run(
@@ -355,7 +411,8 @@ pub async fn run(
             fs::copy(&jar_shared, &jar_path).context("Copy JAR from shared")?;
         } else {
             progress(&app, "download", 12.0, "Downloading Minecraft client…");
-            download_file(&client, &ver.downloads.client.url, &jar_shared).await
+            download_file(&client, &ver.downloads.client.url, &jar_shared,
+                ver.downloads.client.size, Some(&ver.downloads.client.sha1), Some(&dl_bytes)).await
                 .context("Failed to download Minecraft client")?;
             fs::copy(&jar_shared, &jar_path).context("Copy JAR to instance")?;
         }
@@ -393,7 +450,8 @@ pub async fn run(
             let path = libs_dir.join(&art.path);
             fs::create_dir_all(path.parent().unwrap())?;
             if !is_valid_file(&path, art.size) {
-                let _ = download_file(&client, &art.url, &path).await;
+                download_file(&client, &art.url, &path, art.size, Some(&art.sha1), Some(&dl_bytes)).await
+                    .with_context(|| format!("Downloading library {}", lib.name))?;
             }
             classpath.push(path.to_string_lossy().into_owned());
         }
@@ -408,9 +466,10 @@ pub async fn run(
                         let path = libs_dir.join(&nat.path);
                         fs::create_dir_all(path.parent().unwrap())?;
                         if !is_valid_file(&path, nat.size) {
-                            let _ = download_file(&client, &nat.url, &path).await;
+                            download_file(&client, &nat.url, &path, nat.size, Some(&nat.sha1), Some(&dl_bytes)).await
+                                .with_context(|| format!("Downloading native {}", lib.name))?;
                         }
-                        let _ = extract_natives(&path, &natives_dir);
+                        extract_natives(&path, &natives_dir).with_context(|| format!("Extracting natives {}", lib.name))?;
                     }
                 }
             }
@@ -437,7 +496,7 @@ pub async fn run(
     let total_assets = idx.objects.len();
     progress(&app, "download", 50.0, &format!("Assets (0/{total_assets})…"));
     download_assets_parallel(&app, &client, &idx.objects, &objs_dir, concurrent_downloads, 50.0, 35.0,
-        cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone()).await;
+cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone(), idx.map_to_resources).await?;
     if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
     progress(&app, "download", 85.0, &format!("Assets ({total_assets}/{total_assets})…"));
 
@@ -523,14 +582,14 @@ pub async fn run(
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(out).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(out).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
     if let Some(err) = child.stderr.take() {
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(err).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(err).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
 
@@ -665,7 +724,9 @@ async fn download_modrinth_mod(
         if let (Some(dl_url), Some(name)) = (f["url"].as_str(), f["filename"].as_str()) {
             let dest = mods_dir.join(name);
             if !is_valid_file(&dest, 0) {
-                let _ = download_file(client, dl_url, &dest).await;
+                // Best-effort: extra LB mods (sodium, iris, …) are optional —
+                // the game starts fine without them, so a failure here is not fatal.
+                let _ = download_file(client, dl_url, &dest, 0, None, None).await;
             }
         }
     }
@@ -757,7 +818,8 @@ pub async fn run_lb(
             fs::copy(&jar_shared, &jar_path).context("Copy JAR from shared")?;
         } else {
             progress(&app, "download", 14.0, "Downloading Minecraft client…");
-            download_file(&client, &ver.downloads.client.url, &jar_shared).await?;
+            download_file(&client, &ver.downloads.client.url, &jar_shared,
+                ver.downloads.client.size, Some(&ver.downloads.client.sha1), Some(&dl_bytes)).await?;
             fs::copy(&jar_shared, &jar_path).context("Copy JAR to instance")?;
         }
     } else if !is_valid_file(&jar_shared, ver.downloads.client.size) {
@@ -785,7 +847,7 @@ pub async fn run_lb(
         if let Some(art) = &dl.artifact {
             let p = libs_dir.join(&art.path);
             fs::create_dir_all(p.parent().unwrap())?;
-            if !is_valid_file(&p, art.size) { let _ = download_file(&client, &art.url, &p).await; }
+            if !is_valid_file(&p, art.size) { download_file(&client, &art.url, &p, art.size, Some(&art.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading library {}", lib.name))?; }
             classpath.push(p.to_string_lossy().into_owned());
         }
         if let Some(natives_map) = &lib.natives {
@@ -796,8 +858,8 @@ pub async fn run_lb(
                     if let Some(nat) = classifiers.get(&classifier) {
                         let p = libs_dir.join(&nat.path);
                         fs::create_dir_all(p.parent().unwrap())?;
-                        if !is_valid_file(&p, nat.size) { let _ = download_file(&client, &nat.url, &p).await; }
-                        let _ = extract_natives(&p, &natives_dir);
+                        if !is_valid_file(&p, nat.size) { download_file(&client, &nat.url, &p, nat.size, Some(&nat.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading native {}", lib.name))?; }
+                        extract_natives(&p, &natives_dir).with_context(|| format!("Extracting natives {}", lib.name))?;
                     }
                 }
             }
@@ -818,7 +880,7 @@ pub async fn run_lb(
     let total_a = idx.objects.len();
     progress(&app, "download", 42.0, &format!("Assets (0/{total_a})…"));
     download_assets_parallel(&app, &client, &idx.objects, &objs_dir, concurrent_downloads, 42.0, 20.0,
-        cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone()).await;
+cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone(), idx.map_to_resources).await?;
     if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
     progress(&app, "download", 62.0, &format!("Assets ({total_a}/{total_a})…"));
 
@@ -856,7 +918,7 @@ pub async fn run_lb(
         if !dest.exists() {
             fs::create_dir_all(dest.parent().unwrap())?;
             let url = format!("{}{}", flib.url.trim_end_matches('/'), format!("/{rel_path}"));
-            let _ = download_file(&client, &url, &dest).await;
+            download_file(&client, &url, &dest, 0, None, Some(&dl_bytes)).await.with_context(|| format!("Downloading {}", dest.display()))?;
         }
         classpath.push(dest.to_string_lossy().into_owned());
     }
@@ -866,7 +928,7 @@ pub async fn run_lb(
     for (i, m) in manifest.mods.iter().enumerate() {
         if !m.required { continue; }
         let pct = 76.0 + (i as f32 / total_mods.max(1) as f32) * 14.0;
-        progress(&app, "download", pct, &format!("Скачиваю: {}…", m.name));
+        progress(&app, "download", pct, &format!("Downloading: {}…", m.name));
         let src_type = m.source.get("type").and_then(|v| v.as_str()).unwrap_or("");
         match src_type {
             "skip" => {
@@ -891,9 +953,9 @@ pub async fn run_lb(
 
                     if !is_valid_file(&dest, 0) {
                         progress(&app, "download", pct,
-                            &format!("Открываем страницу скачивания {}…  нажмите «Download»", m.name));
+                            &format!("Opening download page for {}… click «Download»", m.name));
                         download_lb_mod_webview(&app, &dl_url, &dest).await
-                            .with_context(|| format!("Не удалось скачать мод {}", m.name))?;
+                            .with_context(|| format!("Failed to download mod {}", m.name))?;
                     }
                 }
             }
@@ -917,7 +979,7 @@ pub async fn run_lb(
                     if !is_valid_file(&dest, 0) {
                         let url = format!("{}/{group_path}/{art}/{ver}/{jar_name}",
                             base.trim_end_matches('/'));
-                        let _ = download_file(&client, &url, &dest).await;
+                        download_file(&client, &url, &dest, 0, None, Some(&dl_bytes)).await.with_context(|| format!("Downloading {}", dest.display()))?;
                     }
                 }
             }
@@ -1017,14 +1079,14 @@ pub async fn run_lb(
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(out).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(out).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
     if let Some(err) = child.stderr.take() {
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(err).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(err).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
 
@@ -1161,7 +1223,7 @@ pub async fn run_fabric(
     let jar_path = ver_dir.join(format!("{mc_ver}.jar"));
     if !is_valid_file(&jar_path, ver.downloads.client.size) {
         progress(&app, "download", 14.0, "Downloading Minecraft client…");
-        download_file(&client, &ver.downloads.client.url, &jar_path).await?;
+        download_file(&client, &ver.downloads.client.url, &jar_path, ver.downloads.client.size, Some(&ver.downloads.client.sha1), Some(&dl_bytes)).await?;
     }
 
     // 3. Vanilla libraries
@@ -1185,7 +1247,7 @@ pub async fn run_fabric(
         if let Some(art) = &dl.artifact {
             let p = libs_dir.join(&art.path);
             fs::create_dir_all(p.parent().unwrap())?;
-            if !is_valid_file(&p, art.size) { let _ = download_file(&client, &art.url, &p).await; }
+            if !is_valid_file(&p, art.size) { download_file(&client, &art.url, &p, art.size, Some(&art.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading library {}", lib.name))?; }
             classpath.push(p.to_string_lossy().into_owned());
         }
         if let Some(natives_map) = &lib.natives {
@@ -1196,8 +1258,8 @@ pub async fn run_fabric(
                     if let Some(nat) = classifiers.get(&classifier) {
                         let p = libs_dir.join(&nat.path);
                         fs::create_dir_all(p.parent().unwrap())?;
-                        if !is_valid_file(&p, nat.size) { let _ = download_file(&client, &nat.url, &p).await; }
-                        let _ = extract_natives(&p, &natives_dir);
+                        if !is_valid_file(&p, nat.size) { download_file(&client, &nat.url, &p, nat.size, Some(&nat.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading native {}", lib.name))?; }
+                        extract_natives(&p, &natives_dir).with_context(|| format!("Extracting natives {}", lib.name))?;
                     }
                 }
             }
@@ -1218,7 +1280,7 @@ pub async fn run_fabric(
     let total_a   = idx.objects.len();
     progress(&app, "download", 42.0, &format!("Assets (0/{total_a})…"));
     download_assets_parallel(&app, &client, &idx.objects, &objs_dir, concurrent_downloads, 42.0, 20.0,
-        cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone()).await;
+cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone(), idx.map_to_resources).await?;
     if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
     progress(&app, "download", 62.0, &format!("Assets ({total_a}/{total_a})…"));
 
@@ -1253,7 +1315,7 @@ pub async fn run_fabric(
         if !dest.exists() {
             fs::create_dir_all(dest.parent().unwrap())?;
             let url = format!("{}/{rel_path}", flib.url.trim_end_matches('/'));
-            let _ = download_file(&client, &url, &dest).await;
+            download_file(&client, &url, &dest, 0, None, Some(&dl_bytes)).await.with_context(|| format!("Downloading {}", dest.display()))?;
         }
         classpath.push(dest.to_string_lossy().into_owned());
     }
@@ -1279,7 +1341,8 @@ pub async fn run_fabric(
                 if let (Some(url), Some(name)) = (f["url"].as_str(), f["filename"].as_str()) {
                     let dest = mods_dir.join(name);
                     if !is_valid_file(&dest, 0) {
-                        let _ = download_file(&client, url, &dest).await;
+                        download_file(&client, url, &dest, 0, None, Some(&dl_bytes)).await
+                            .with_context(|| format!("Downloading {}", dest.display()))?;
                     }
                 }
             }
@@ -1360,14 +1423,14 @@ pub async fn run_fabric(
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(out).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(out).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
     if let Some(err) = child.stderr.take() {
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(err).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(err).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
 
@@ -1415,33 +1478,6 @@ pub async fn run_fabric(
     });
 
     Ok(())
-}
-
-// ─── Parallel URL downloader ─────────────────────────────────────────────────
-
-async fn parallel_download_urls(
-    client: &reqwest::Client,
-    downloads: &[(String, PathBuf, u64)], // (url, dest_path, expected_size)
-    max_concurrent: usize,
-) {
-    let sem = Arc::new(Semaphore::new(max_concurrent.max(1)));
-    let mut set = tokio::task::JoinSet::<()>::new();
-    for (url, path, size) in downloads {
-        if is_valid_file(path, *size) { continue; }
-        let sem_c    = sem.clone();
-        let client_c = client.clone();
-        let url_c    = url.clone();
-        let path_c   = path.clone();
-        let size_c   = *size;
-        set.spawn(async move {
-            let _permit = sem_c.acquire_owned().await.unwrap();
-            if !is_valid_file(&path_c, size_c) {
-                if let Some(p) = path_c.parent() { let _ = fs::create_dir_all(p); }
-                let _ = download_file(&client_c, &url_c, &path_c).await;
-            }
-        });
-    }
-    while set.join_next().await.is_some() {}
 }
 
 // ─── Quilt launcher ───────────────────────────────────────────────────────────
@@ -1527,7 +1563,7 @@ pub async fn run_quilt(
     let jar_path = ver_dir.join(format!("{mc_ver}.jar"));
     if !is_valid_file(&jar_path, ver.downloads.client.size) {
         progress(&app, "download", 14.0, "Downloading Minecraft client…");
-        download_file(&client, &ver.downloads.client.url, &jar_path).await?;
+        download_file(&client, &ver.downloads.client.url, &jar_path, ver.downloads.client.size, Some(&ver.downloads.client.sha1), Some(&dl_bytes)).await?;
     }
 
     // 3. Vanilla libraries
@@ -1551,7 +1587,7 @@ pub async fn run_quilt(
         if let Some(art) = &dl.artifact {
             let p = libs_dir.join(&art.path);
             fs::create_dir_all(p.parent().unwrap())?;
-            if !is_valid_file(&p, art.size) { let _ = download_file(&client, &art.url, &p).await; }
+            if !is_valid_file(&p, art.size) { download_file(&client, &art.url, &p, art.size, Some(&art.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading library {}", lib.name))?; }
             classpath.push(p.to_string_lossy().into_owned());
         }
         if let Some(natives_map) = &lib.natives {
@@ -1562,8 +1598,8 @@ pub async fn run_quilt(
                     if let Some(nat) = classifiers.get(&classifier) {
                         let p = libs_dir.join(&nat.path);
                         fs::create_dir_all(p.parent().unwrap())?;
-                        if !is_valid_file(&p, nat.size) { let _ = download_file(&client, &nat.url, &p).await; }
-                        let _ = extract_natives(&p, &natives_dir);
+                        if !is_valid_file(&p, nat.size) { download_file(&client, &nat.url, &p, nat.size, Some(&nat.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading native {}", lib.name))?; }
+                        extract_natives(&p, &natives_dir).with_context(|| format!("Extracting natives {}", lib.name))?;
                     }
                 }
             }
@@ -1584,7 +1620,7 @@ pub async fn run_quilt(
     let total_a   = idx.objects.len();
     progress(&app, "download", 42.0, &format!("Assets (0/{total_a})…"));
     download_assets_parallel(&app, &client, &idx.objects, &objs_dir, concurrent_downloads, 42.0, 20.0,
-        cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone()).await;
+cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone(), idx.map_to_resources).await?;
     if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
     progress(&app, "download", 62.0, &format!("Assets ({total_a}/{total_a})…"));
 
@@ -1625,7 +1661,7 @@ pub async fn run_quilt(
                 qlib.url.clone()
             };
             let url = format!("{}/{rel_path}", base_url.trim_end_matches('/'));
-            let _ = download_file(&client, &url, &dest).await;
+            download_file(&client, &url, &dest, 0, None, Some(&dl_bytes)).await.with_context(|| format!("Downloading {}", dest.display()))?;
         }
         classpath.push(dest.to_string_lossy().into_owned());
     }
@@ -1704,14 +1740,14 @@ pub async fn run_quilt(
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(out).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(out).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
     if let Some(err) = child.stderr.take() {
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(err).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(err).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
 
@@ -1828,7 +1864,7 @@ pub async fn run_forge(
 
         if !installer_path.exists() {
             progress(&app, "download", 10.0, "Downloading Forge installer…");
-            download_file(&client, &installer_url, &installer_path).await
+            download_file(&client, &installer_url, &installer_path, 0, None, Some(&dl_bytes)).await
                 .context("Failed to download Forge installer")?;
         }
 
@@ -1921,7 +1957,7 @@ pub async fn run_forge(
     let jar_path = ver_dir.join(format!("{inherits_from}.jar"));
     if !is_valid_file(&jar_path, ver.downloads.client.size) {
         progress(&app, "download", 44.0, "Downloading Minecraft client…");
-        download_file(&client, &ver.downloads.client.url, &jar_path).await?;
+        download_file(&client, &ver.downloads.client.url, &jar_path, ver.downloads.client.size, Some(&ver.downloads.client.sha1), Some(&dl_bytes)).await?;
     }
 
     // Vanilla libraries
@@ -1945,7 +1981,7 @@ pub async fn run_forge(
         if let Some(art) = &dl.artifact {
             let p = libs_dir.join(&art.path);
             fs::create_dir_all(p.parent().unwrap())?;
-            if !is_valid_file(&p, art.size) { let _ = download_file(&client, &art.url, &p).await; }
+            if !is_valid_file(&p, art.size) { download_file(&client, &art.url, &p, art.size, Some(&art.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading library {}", lib.name))?; }
             classpath.push(p.to_string_lossy().into_owned());
         }
         if let Some(natives_map) = &lib.natives {
@@ -1956,8 +1992,8 @@ pub async fn run_forge(
                     if let Some(nat) = classifiers.get(&classifier) {
                         let p = libs_dir.join(&nat.path);
                         fs::create_dir_all(p.parent().unwrap())?;
-                        if !is_valid_file(&p, nat.size) { let _ = download_file(&client, &nat.url, &p).await; }
-                        let _ = extract_natives(&p, &natives_dir);
+                        if !is_valid_file(&p, nat.size) { download_file(&client, &nat.url, &p, nat.size, Some(&nat.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading native {}", lib.name))?; }
+                        extract_natives(&p, &natives_dir).with_context(|| format!("Extracting natives {}", lib.name))?;
                     }
                 }
             }
@@ -1978,7 +2014,7 @@ pub async fn run_forge(
     let total_a  = idx.objects.len();
     progress(&app, "download", 62.0, &format!("Assets (0/{total_a})…"));
     download_assets_parallel(&app, &client, &idx.objects, &objs_dir, concurrent_downloads, 62.0, 15.0,
-        cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone()).await;
+cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone(), idx.map_to_resources).await?;
     if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
 
     // Forge libraries (already downloaded by installer, but add to classpath)
@@ -1996,7 +2032,10 @@ pub async fn run_forge(
                     let p = libs_dir.join(path);
                     if !p.exists() {
                         fs::create_dir_all(p.parent().unwrap())?;
-                        let _ = download_file(&client, url, &p).await;
+                        let size = lib_val["downloads"]["artifact"]["size"].as_u64().unwrap_or(0);
+                        let sha1 = lib_val["downloads"]["artifact"]["sha1"].as_str();
+                        download_file(&client, url, &p, size, sha1, Some(&dl_bytes)).await
+                            .with_context(|| format!("Downloading Forge library {path}"))?;
                     }
                     if p.exists() { classpath.push(p.to_string_lossy().into_owned()); }
                     continue;
@@ -2126,14 +2165,14 @@ pub async fn run_forge(
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(out).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(out).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
     if let Some(err) = child.stderr.take() {
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(err).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(err).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
 
@@ -2245,7 +2284,7 @@ pub async fn run_neoforge(
 
         if !installer_path.exists() {
             progress(&app, "download", 10.0, "Downloading NeoForge installer…");
-            download_file(&client, &installer_url, &installer_path).await
+            download_file(&client, &installer_url, &installer_path, 0, None, Some(&dl_bytes)).await
                 .context("Failed to download NeoForge installer")?;
         }
 
@@ -2332,7 +2371,7 @@ pub async fn run_neoforge(
     let jar_path = ver_dir.join(format!("{inherits_from}.jar"));
     if !is_valid_file(&jar_path, ver.downloads.client.size) {
         progress(&app, "download", 44.0, "Downloading Minecraft client…");
-        download_file(&client, &ver.downloads.client.url, &jar_path).await?;
+        download_file(&client, &ver.downloads.client.url, &jar_path, ver.downloads.client.size, Some(&ver.downloads.client.sha1), Some(&dl_bytes)).await?;
     }
 
     let libs_dir    = shared_dir.join("libraries");
@@ -2356,7 +2395,7 @@ pub async fn run_neoforge(
         if let Some(art) = &dl.artifact {
             let p = libs_dir.join(&art.path);
             fs::create_dir_all(p.parent().unwrap())?;
-            if !is_valid_file(&p, art.size) { let _ = download_file(&client, &art.url, &p).await; }
+            if !is_valid_file(&p, art.size) { download_file(&client, &art.url, &p, art.size, Some(&art.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading library {}", lib.name))?; }
             classpath.push(p.to_string_lossy().into_owned());
         }
         if let Some(natives_map) = &lib.natives {
@@ -2367,8 +2406,8 @@ pub async fn run_neoforge(
                     if let Some(nat) = classifiers.get(&classifier) {
                         let p = libs_dir.join(&nat.path);
                         fs::create_dir_all(p.parent().unwrap())?;
-                        if !is_valid_file(&p, nat.size) { let _ = download_file(&client, &nat.url, &p).await; }
-                        let _ = extract_natives(&p, &natives_dir);
+                        if !is_valid_file(&p, nat.size) { download_file(&client, &nat.url, &p, nat.size, Some(&nat.sha1), Some(&dl_bytes)).await.with_context(|| format!("Downloading native {}", lib.name))?; }
+                        extract_natives(&p, &natives_dir).with_context(|| format!("Extracting natives {}", lib.name))?;
                     }
                 }
             }
@@ -2389,7 +2428,7 @@ pub async fn run_neoforge(
     let total_a  = idx.objects.len();
     progress(&app, "download", 62.0, &format!("Assets (0/{total_a})…"));
     download_assets_parallel(&app, &client, &idx.objects, &objs_dir, concurrent_downloads, 62.0, 15.0,
-        cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone()).await;
+cancel_dl.clone(), pause_dl.clone(), dl_bytes.clone(), idx.map_to_resources).await?;
     if cancel_dl.load(Ordering::Relaxed) { return Err(anyhow!("Download cancelled")); }
 
     // NeoForge libraries
@@ -2406,7 +2445,10 @@ pub async fn run_neoforge(
                     let p = libs_dir.join(path);
                     if !p.exists() {
                         fs::create_dir_all(p.parent().unwrap())?;
-                        let _ = download_file(&client, url, &p).await;
+                        let size = lib_val["downloads"]["artifact"]["size"].as_u64().unwrap_or(0);
+                        let sha1 = lib_val["downloads"]["artifact"]["sha1"].as_str();
+                        download_file(&client, url, &p, size, sha1, Some(&dl_bytes)).await
+                            .with_context(|| format!("Downloading NeoForge library {path}"))?;
                     }
                     if p.exists() { classpath.push(p.to_string_lossy().into_owned()); }
                     continue;
@@ -2529,14 +2571,14 @@ pub async fn run_neoforge(
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(out).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(out).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
     if let Some(err) = child.stderr.take() {
         let buf = jvm_lines.clone();
         std::thread::spawn(move || {
             use std::io::BufRead;
-            std::io::BufReader::new(err).lines().flatten().for_each(|l| { buf.lock().unwrap().push(l); });
+            std::io::BufReader::new(err).lines().flatten().for_each(|l| jvm_push(&buf, l));
         });
     }
 
@@ -2616,10 +2658,10 @@ async fn download_lb_mod_webview(
     let closed_ev  = closed.clone();
 
     let parsed = url::Url::parse(queue_url)
-        .map_err(|e| anyhow!("Неверный URL: {e}"))?;
+        .map_err(|e| anyhow!("Invalid URL: {e}"))?;
 
     let win = tauri::WebviewWindowBuilder::new(app, "lb-dl", tauri::WebviewUrl::External(parsed))
-        .title("LiquidBounce — нажмите «Download»")
+        .title("LiquidBounce — click «Download»")
         .inner_size(960.0, 680.0)
         .center()
         .always_on_top(true)
@@ -2644,7 +2686,7 @@ async fn download_lb_mod_webview(
             }
         })
         .build()
-        .map_err(|e| anyhow!("Не удалось открыть окно: {e}"))?;
+        .map_err(|e| anyhow!("Failed to open window: {e}"))?;
 
     win.on_window_event({
         let c = closed_ev.clone();
@@ -2674,40 +2716,40 @@ async fn download_lb_mod_webview(
 
         if errored.load(Ordering::Relaxed) {
             let _ = win.close();
-            return Err(anyhow!("Ошибка при скачивании мода в браузере"));
+            return Err(anyhow!("Failed to download mod in browser"));
         }
         // Window closed before the download even started → user cancelled
         if closed.load(Ordering::Relaxed) && !started.load(Ordering::Relaxed) {
-            return Err(anyhow!("Скачивание мода отменено пользователем"));
+            return Err(anyhow!("Mod download cancelled by user"));
         }
 
         // Show file-size progress while WebView downloads
         if started.load(Ordering::Relaxed) {
             let sz_mb = fs::metadata(&temp_path).map(|m| m.len()).unwrap_or(0) / 1024 / 1024;
             let pct   = (77.0_f32 + sz_mb as f32).min(88.0);
-            progress(app, "download", pct, &format!("Скачиваю LiquidBounce… {sz_mb} MB"));
+            progress(app, "download", pct, &format!("Downloading LiquidBounce… {sz_mb} MB"));
         }
 
         if start.elapsed().as_secs() > 300 {
             let _ = win.close();
-            return Err(anyhow!("Время ожидания истекло (5 мин)"));
+            return Err(anyhow!("Timed out (5 min)"));
         }
     }
     let _ = win.close();
 
     // Read the completed download and process it
-    let bytes = fs::read(&temp_path).context("Чтение скачанного файла")?;
+    let bytes = fs::read(&temp_path).context("Reading downloaded file")?;
     let _ = fs::remove_file(&temp_path); // cleanup regardless
 
     if bytes.len() < 4 || !bytes.starts_with(b"PK") {
-        return Err(anyhow!("Скачанный файл не является ZIP/JAR"));
+        return Err(anyhow!("Downloaded file is not a ZIP/JAR"));
     }
 
     // Try to extract a .jar from inside the ZIP; if none found, the file itself is the JAR
     match extract_jar_from_zip(&bytes, dest) {
         Ok(()) => Ok(()),
         Err(_) => {
-            fs::write(dest, &bytes).context("Сохранение JAR")?;
+            fs::write(dest, &bytes).context("Saving JAR")?;
             Ok(())
         }
     }
@@ -2734,7 +2776,7 @@ fn extract_jar_from_zip(zip_bytes: &[u8], dest: &PathBuf) -> Result<()> {
         }
     }
 
-    let idx = jar_idx.ok_or_else(|| anyhow!("В ZIP нет .jar файла"))?;
+    let idx = jar_idx.ok_or_else(|| anyhow!("No .jar file found in ZIP"))?;
     let mut entry = archive.by_index(idx)?;
     let mut data  = Vec::new();
     entry.read_to_end(&mut data)?;
@@ -2762,6 +2804,9 @@ pub fn mc_dir() -> PathBuf {
     }
 }
 
+/// Size check for already-cached files. Fresh downloads are verified with
+/// SHA-1 in `download_file`; cached files are trusted by size (re-downloading
+/// every cached file to re-hash it on each launch would cost bandwidth).
 fn is_valid_file(path: &PathBuf, expected_size: u64) -> bool {
     if expected_size == 0 { return path.exists(); }
     match fs::metadata(path) {
@@ -2770,9 +2815,78 @@ fn is_valid_file(path: &PathBuf, expected_size: u64) -> bool {
     }
 }
 
-async fn download_file(client: &reqwest::Client, url: &str, path: &PathBuf) -> Result<()> {
-    let bytes = client.get(url).send().await?.bytes().await?;
-    fs::write(path, &bytes)?;
+/// Stream a URL to `path`, verifying size and (when known) SHA-1, and count
+/// the bytes into the shared speed counter.
+///
+/// Writes to a `.part` file first and renames on success, so an interrupted
+/// download can never leave a corrupt file at the real path — `is_valid_file`
+/// would trust a half-written file forever.
+async fn download_file(
+    client: &reqwest::Client,
+    url: &str,
+    path: &PathBuf,
+    expected_size: u64,
+    expected_sha1: Option<&str>,
+    bytes_dl: Option<&AtomicU64>,
+) -> Result<()> {
+    use sha1::Digest;
+    use std::io::Write;
+
+    let resp = client.get(url).send().await?
+        .error_for_status()
+        .with_context(|| format!("HTTP error downloading {url}"))?;
+
+    if let Some(p) = path.parent() { fs::create_dir_all(p)?; }
+    let part_path = path.with_extension("part");
+    let mut file = fs::File::create(&part_path)?;
+    let mut hasher = sha1::Sha1::new();
+    let mut downloaded: u64 = 0;
+    let mut resp = resp;
+    while let Some(chunk) = resp.chunk().await? {
+        file.write_all(&chunk)?;
+        hasher.update(&chunk);
+        downloaded += chunk.len() as u64;
+        if let Some(counter) = bytes_dl {
+            counter.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+        }
+    }
+    drop(file);
+
+    if expected_size > 0 && downloaded != expected_size {
+        let _ = fs::remove_file(&part_path);
+        return Err(anyhow!(
+            "Size mismatch for {url}: got {downloaded}, expected {expected_size}"
+        ));
+    }
+    if let Some(expected) = expected_sha1 {
+        let digest = format!("{:x}", hasher.finalize());
+        if !digest.eq_ignore_ascii_case(expected) {
+            let _ = fs::remove_file(&part_path);
+            return Err(anyhow!(
+                "SHA-1 mismatch for {url}: got {digest}, expected {expected}"
+            ));
+        }
+    }
+    fs::rename(&part_path, path)
+        .with_context(|| format!("Finalizing {}", path.display()))?;
+    Ok(())
+}
+
+/// Pre-1.7.3 asset indexes (`map_to_resources: true`) require every asset to
+/// also be reachable at `assets/virtual/legacy/<index key>` — without this the
+/// old versions start without textures or sounds. Hard links (same volume,
+/// zero extra space), falling back to a copy.
+fn map_legacy_assets(objects: &HashMap<String, AssetObj>, objs_dir: &PathBuf) -> Result<()> {
+    let Some(assets_root) = objs_dir.parent() else { return Ok(()) };
+    let legacy_dir = assets_root.join("virtual").join("legacy");
+    for (path, obj) in objects {
+        let src = objs_dir.join(&obj.hash[..2]).join(&obj.hash);
+        if !src.exists() { continue; }
+        let dst = legacy_dir.join(path);
+        if dst.exists() { continue; }
+        if let Some(p) = dst.parent() { fs::create_dir_all(p)?; }
+        fs::hard_link(&src, &dst).or_else(|_| fs::copy(&src, &dst).map(|_| ()))?;
+    }
     Ok(())
 }
 
@@ -3056,30 +3170,37 @@ pub async fn ensure_java(
         ));
     }
     let total = resp.content_length().unwrap_or(0);
-    let mut bytes: Vec<u8> = Vec::new();
-    let mut downloaded: u64 = 0;
-    let mut last_mb: u64 = 0;
-    let mut resp = resp;
-    while let Some(chunk) = resp.chunk().await.context("Java download interrupted")? {
-        downloaded += chunk.len() as u64;
-        bytes.extend_from_slice(&chunk);
-        let mb = downloaded / 1_048_576;
-        if mb > last_mb {
-            last_mb = mb;
-            if total > 0 {
-                let tot = total / 1_048_576;
-                let pct = 88.0_f32 + (downloaded as f32 / total as f32) * 5.0;
-                progress(app, "download", pct, &format!("Java {major}: {mb}/{tot} MB…"));
-            } else {
-                progress(app, "download", 89.0, &format!("Java {major}: {mb} MB…"));
+    // Stream straight to disk — a JRE archive is ~40–50 MB and does not need
+    // to sit in RAM. Bytes are counted into the shared speed counter so the
+    // live speed readout covers Java downloads too.
+    fs::create_dir_all(&java_dir)?;
+    let zip_path = java_dir.join("jre.zip");
+    let dl_bytes = app.state::<GameState>().dl_bytes.clone();
+    {
+        use std::io::Write;
+        let mut file = fs::File::create(&zip_path)?;
+        let mut downloaded: u64 = 0;
+        let mut last_mb: u64 = 0;
+        let mut resp = resp;
+        while let Some(chunk) = resp.chunk().await.context("Java download interrupted")? {
+            file.write_all(&chunk)?;
+            downloaded += chunk.len() as u64;
+            dl_bytes.fetch_add(chunk.len() as u64, Ordering::Relaxed);
+            let mb = downloaded / 1_048_576;
+            if mb > last_mb {
+                last_mb = mb;
+                if total > 0 {
+                    let tot = total / 1_048_576;
+                    let pct = 88.0_f32 + (downloaded as f32 / total as f32) * 5.0;
+                    progress(app, "download", pct, &format!("Java {major}: {mb}/{tot} MB…"));
+                } else {
+                    progress(app, "download", 89.0, &format!("Java {major}: {mb} MB…"));
+                }
             }
         }
     }
 
     progress(app, "download", 93.5, &format!("Installing Java {major}…"));
-    fs::create_dir_all(&java_dir)?;
-    let zip_path = java_dir.join("jre.zip");
-    fs::write(&zip_path, &bytes)?;
     extract_zip_all(&zip_path, &java_dir)?;
     let _ = fs::remove_file(&zip_path);
 
@@ -3166,31 +3287,33 @@ pub async fn download_java_major(app: &tauri::AppHandle, major: u32) -> Result<(
     }
 
     let total = resp.content_length().unwrap_or(0);
-    let mut bytes: Vec<u8> = Vec::new();
-    let mut downloaded: u64 = 0;
-    let mut last_mb: u64 = 0;
-    let mut resp = resp;
-
-    while let Some(chunk) = resp.chunk().await.context("Download interrupted")? {
-        downloaded += chunk.len() as u64;
-        bytes.extend_from_slice(&chunk);
-        let mb = downloaded / 1_048_576;
-        if mb > last_mb {
-            last_mb = mb;
-            let pct = if total > 0 {
-                (downloaded as f32 / total as f32) * 90.0
-            } else {
-                (mb as f32 * 1.5_f32).min(85.0)
-            };
-            let tot_s = if total > 0 { format!("/{}", total / 1_048_576) } else { String::new() };
-            emit("downloading", pct, &format!("Java {major}: {mb}{tot_s} MB"));
+    // Stream to disk instead of buffering the whole archive in RAM.
+    fs::create_dir_all(&java_dir)?;
+    let zip_path = java_dir.join("jre.zip");
+    {
+        use std::io::Write;
+        let mut file = fs::File::create(&zip_path)?;
+        let mut downloaded: u64 = 0;
+        let mut last_mb: u64 = 0;
+        let mut resp = resp;
+        while let Some(chunk) = resp.chunk().await.context("Download interrupted")? {
+            file.write_all(&chunk)?;
+            downloaded += chunk.len() as u64;
+            let mb = downloaded / 1_048_576;
+            if mb > last_mb {
+                last_mb = mb;
+                let pct = if total > 0 {
+                    (downloaded as f32 / total as f32) * 90.0
+                } else {
+                    (mb as f32 * 1.5_f32).min(85.0)
+                };
+                let tot_s = if total > 0 { format!("/{}", total / 1_048_576) } else { String::new() };
+                emit("downloading", pct, &format!("Java {major}: {mb}{tot_s} MB"));
+            }
         }
     }
 
     emit("installing", 92.0, &format!("Installing Java {major}…"));
-    fs::create_dir_all(&java_dir)?;
-    let zip_path = java_dir.join("jre.zip");
-    fs::write(&zip_path, &bytes)?;
     extract_zip_all(&zip_path, &java_dir)?;
     let _ = fs::remove_file(&zip_path);
 

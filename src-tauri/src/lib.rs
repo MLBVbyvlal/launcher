@@ -14,6 +14,121 @@ struct MsAccount {
     refresh_token: String,
 }
 
+/// Xbox Live → XSTS → Minecraft token chain, shared by the OAuth login flow
+/// and the refresh-token flow. Returns (mc_token, uuid, username).
+async fn ms_token_chain(client: &reqwest::Client, ms_token: &str) -> Result<(String, String, String), String> {
+    // Xbox Live token
+    let xbl: serde_json::Value = client
+        .post("https://user.auth.xboxlive.com/user/authenticate")
+        .json(&serde_json::json!({
+            "Properties": {
+                "AuthMethod": "RPS",
+                "SiteName": "user.auth.xboxlive.com",
+                "RpsTicket": ms_token,
+            },
+            "RelyingParty": "http://auth.xboxlive.com",
+            "TokenType": "JWT",
+        }))
+        .send().await.map_err(|e| format!("Xbox Live: {e}"))?
+        .json().await.map_err(|e| format!("XBL parse: {e}"))?;
+
+    let xbl_token = xbl["Token"].as_str().ok_or("Xbox Live auth failed")?;
+    let uhs = xbl["DisplayClaims"]["xui"][0]["uhs"].as_str().ok_or("No UHS in XBL")?;
+
+    // XSTS token
+    let xsts: serde_json::Value = client
+        .post("https://xsts.auth.xboxlive.com/xsts/authorize")
+        .json(&serde_json::json!({
+            "Properties": {
+                "SandboxId": "RETAIL",
+                "UserTokens": [xbl_token],
+            },
+            "RelyingParty": "rp://api.minecraftservices.com/",
+            "TokenType": "JWT",
+        }))
+        .send().await.map_err(|e| format!("XSTS: {e}"))?
+        .json().await.map_err(|e| format!("XSTS parse: {e}"))?;
+
+    if let Some(xerr) = xsts["XErr"].as_u64() {
+        return Err(match xerr {
+            2148916238 => "Parental consent required for this Xbox account.".to_string(),
+            2148916235 => "Xbox Live is not available in your region.".to_string(),
+            2148916233 => "No Xbox account — create one at xbox.com first.".to_string(),
+            _ => format!("Xbox error {xerr}"),
+        });
+    }
+    let xsts_token = xsts["Token"].as_str().ok_or("XSTS auth failed")?;
+
+    // Minecraft token
+    let mc_auth: serde_json::Value = client
+        .post("https://api.minecraftservices.com/authentication/login_with_xbox")
+        .json(&serde_json::json!({
+            "identityToken": format!("XBL3.0 x={uhs};{xsts_token}"),
+        }))
+        .send().await.map_err(|e| format!("Minecraft auth: {e}"))?
+        .json().await.map_err(|e| format!("MC auth parse: {e}"))?;
+
+    let mc_token = mc_auth["access_token"].as_str()
+        .ok_or("Minecraft auth failed — account may not own Minecraft Java Edition")?
+        .to_string();
+
+    // Minecraft profile (UUID + username)
+    let profile: serde_json::Value = client
+        .get("https://api.minecraftservices.com/minecraft/profile")
+        .header("Authorization", format!("Bearer {mc_token}"))
+        .send().await.map_err(|e| format!("Profile fetch: {e}"))?
+        .json().await.map_err(|e| format!("Profile parse: {e}"))?;
+
+    if profile["error"].is_string() {
+        return Err("This account does not own Minecraft Java Edition.".to_string());
+    }
+
+    let uuid     = profile["id"].as_str().ok_or("No UUID in profile")?.to_string();
+    let username = profile["name"].as_str().ok_or("No name in profile")?.to_string();
+
+    Ok((mc_token, uuid, username))
+}
+
+/// Re-authenticate a stored Microsoft account from its refresh token.
+/// Minecraft access tokens live ~24 h; without this the user has to repeat
+/// the full login. Microsoft rotates refresh tokens — when a new one is
+/// returned the frontend must persist it (the old one is then dead).
+#[tauri::command]
+async fn refresh_ms_token(refresh_token: String) -> Result<MsAccount, String> {
+    const REDIRECT_URI: &str = "https://login.live.com/oauth20_desktop.srf";
+    const CLIENT_ID:    &str = "00000000402b5328";
+
+    if refresh_token.trim().is_empty() {
+        return Err("No refresh token stored — sign in again.".to_string());
+    }
+
+    let client = reqwest::Client::builder()
+        .user_agent("MLBV/1.0")
+        .build().map_err(|e| e.to_string())?;
+
+    let ms: serde_json::Value = client
+        .post("https://login.live.com/oauth20_token.srf")
+        .form(&[
+            ("client_id", CLIENT_ID),
+            ("refresh_token", refresh_token.as_str()),
+            ("grant_type", "refresh_token"),
+            ("redirect_uri", REDIRECT_URI),
+        ])
+        .send().await.map_err(|e| format!("MS refresh: {e}"))?
+        .json().await.map_err(|e| format!("MS refresh parse: {e}"))?;
+
+    let ms_token = ms["access_token"].as_str()
+        .ok_or_else(|| format!("MS refresh failed: {ms}"))?
+        .to_string();
+    let new_refresh = ms["refresh_token"].as_str()
+        .filter(|s| !s.is_empty())
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| refresh_token.clone());
+
+    let (mc_token, uuid, username) = ms_token_chain(&client, &ms_token).await?;
+    Ok(MsAccount { username, uuid, access_token: mc_token, refresh_token: new_refresh })
+}
+
 #[tauri::command]
 async fn microsoft_login(app: tauri::AppHandle) -> Result<MsAccount, String> {
     const REDIRECT_URI: &str = "https://login.live.com/oauth20_desktop.srf";
@@ -112,74 +227,8 @@ async fn microsoft_login(app: tauri::AppHandle) -> Result<MsAccount, String> {
         .to_string();
     let refresh_token = ms["refresh_token"].as_str().unwrap_or("").to_string();
 
-    // Xbox Live token
-    let xbl: serde_json::Value = client
-        .post("https://user.auth.xboxlive.com/user/authenticate")
-        .json(&serde_json::json!({
-            "Properties": {
-                "AuthMethod": "RPS",
-                "SiteName": "user.auth.xboxlive.com",
-                "RpsTicket": ms_token,
-            },
-            "RelyingParty": "http://auth.xboxlive.com",
-            "TokenType": "JWT",
-        }))
-        .send().await.map_err(|e| format!("Xbox Live: {e}"))?
-        .json().await.map_err(|e| format!("XBL parse: {e}"))?;
-
-    let xbl_token = xbl["Token"].as_str().ok_or("Xbox Live auth failed")?;
-    let uhs = xbl["DisplayClaims"]["xui"][0]["uhs"].as_str().ok_or("No UHS in XBL")?;
-
-    // 6. XSTS token
-    let xsts: serde_json::Value = client
-        .post("https://xsts.auth.xboxlive.com/xsts/authorize")
-        .json(&serde_json::json!({
-            "Properties": {
-                "SandboxId": "RETAIL",
-                "UserTokens": [xbl_token],
-            },
-            "RelyingParty": "rp://api.minecraftservices.com/",
-            "TokenType": "JWT",
-        }))
-        .send().await.map_err(|e| format!("XSTS: {e}"))?
-        .json().await.map_err(|e| format!("XSTS parse: {e}"))?;
-
-    if let Some(xerr) = xsts["XErr"].as_u64() {
-        return Err(match xerr {
-            2148916238 => "Parental consent required for this Xbox account.".to_string(),
-            2148916235 => "Xbox Live is not available in your region.".to_string(),
-            2148916233 => "No Xbox account — create one at xbox.com first.".to_string(),
-            _ => format!("Xbox error {xerr}"),
-        });
-    }
-    let xsts_token = xsts["Token"].as_str().ok_or("XSTS auth failed")?;
-
-    // 7. Minecraft token
-    let mc_auth: serde_json::Value = client
-        .post("https://api.minecraftservices.com/authentication/login_with_xbox")
-        .json(&serde_json::json!({
-            "identityToken": format!("XBL3.0 x={uhs};{xsts_token}"),
-        }))
-        .send().await.map_err(|e| format!("Minecraft auth: {e}"))?
-        .json().await.map_err(|e| format!("MC auth parse: {e}"))?;
-
-    let mc_token = mc_auth["access_token"].as_str()
-        .ok_or("Minecraft auth failed — account may not own Minecraft Java Edition")?
-        .to_string();
-
-    // 8. Minecraft profile (UUID + username)
-    let profile: serde_json::Value = client
-        .get("https://api.minecraftservices.com/minecraft/profile")
-        .header("Authorization", format!("Bearer {mc_token}"))
-        .send().await.map_err(|e| format!("Profile fetch: {e}"))?
-        .json().await.map_err(|e| format!("Profile parse: {e}"))?;
-
-    if profile["error"].is_string() {
-        return Err("This account does not own Minecraft Java Edition.".to_string());
-    }
-
-    let uuid     = profile["id"].as_str().ok_or("No UUID in profile")?.to_string();
-    let username = profile["name"].as_str().ok_or("No name in profile")?.to_string();
+    // Xbox → XSTS → Minecraft chain (shared with refresh_ms_token)
+    let (mc_token, uuid, username) = ms_token_chain(&client, &ms_token).await?;
 
     Ok(MsAccount { username, uuid, access_token: mc_token, refresh_token })
 }
@@ -273,16 +322,6 @@ fn get_debug_info() -> serde_json::Value {
 }
 
 #[tauri::command]
-fn check_version_installed(version_id: String) -> bool {
-    let dir = launcher::mc_dir();
-    let jar = dir
-        .join("versions")
-        .join(&version_id)
-        .join(format!("{version_id}.jar"));
-    jar.exists()
-}
-
-#[tauri::command]
 fn get_game_dir() -> String {
     launcher::shared_data_dir().to_string_lossy().into_owned()
 }
@@ -299,6 +338,7 @@ async fn launch_game(
     concurrent_downloads: u32,
     max_ram_mb: u32,
 ) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     launcher::run(app, version_id, instance_name, username, uuid, offline, access_token, concurrent_downloads, max_ram_mb)
         .await
         .map_err(|e| format!("{:#}", e))
@@ -317,6 +357,7 @@ async fn launch_lb_game(
     concurrent_downloads: u32,
     max_ram_mb: u32,
 ) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     launcher::run_lb(app, build_id, mc_version, instance_name, username, uuid, offline, access_token, concurrent_downloads, max_ram_mb)
         .await
         .map_err(|e| format!("{:#}", e))
@@ -352,6 +393,7 @@ async fn stop_game(app: tauri::AppHandle) -> Result<(), String> {
 
 #[tauri::command]
 fn read_instance_log(instance_name: String) -> String {
+    if launcher::valid_instance_name(&instance_name).is_err() { return String::new(); }
     let log_path = launcher::instances_dir()
         .join(&instance_name)
         .join("logs")
@@ -362,6 +404,7 @@ fn read_instance_log(instance_name: String) -> String {
 #[tauri::command]
 fn open_instance_logs_folder(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let logs_dir = launcher::instances_dir().join(&instance_name).join("logs");
     let _ = std::fs::create_dir_all(&logs_dir);
     app.opener()
@@ -372,6 +415,7 @@ fn open_instance_logs_folder(app: tauri::AppHandle, instance_name: String) -> Re
 #[tauri::command]
 fn open_game_dir(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let game_dir = launcher::instances_dir().join(&instance_name);
     let _ = std::fs::create_dir_all(&game_dir);
     app.opener()
@@ -381,6 +425,7 @@ fn open_game_dir(app: tauri::AppHandle, instance_name: String) -> Result<(), Str
 
 #[tauri::command]
 fn reinstall_instance(instance_name: String, full_wipe: bool) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let inst_dir = launcher::instances_dir().join(&instance_name);
     if !inst_dir.exists() { return Ok(()); }
     if full_wipe {
@@ -437,7 +482,6 @@ fn parse_semver(v: &str) -> (u64, u64, u64) {
 #[tauri::command]
 async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
     let current = env!("CARGO_PKG_VERSION");
-    let current_type = version_type(current);
     let client = reqwest::Client::builder()
         .user_agent("MLBV/1.0")
         .build().map_err(|e| e.to_string())?;
@@ -446,24 +490,26 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
         .header("Accept", "application/vnd.github+json")
         .send().await.map_err(|e| e.to_string())?
         .json().await.map_err(|e| e.to_string())?;
-    // If running a stable release, only consider stable GitHub releases (prerelease: false)
-    // If running beta/pre-release, consider all non-draft releases
-    let release = releases.iter()
-        .find(|r| {
-            if r["draft"].as_bool().unwrap_or(false) { return false; }
-            if current_type == "release" {
-                !r["prerelease"].as_bool().unwrap_or(false)
-            } else {
-                true
-            }
-        })
+
+    // Consider every non-draft release (all published releases of this
+    // project are marked pre-release, so filtering them out — the old
+    // behaviour — made the updater return "No releases found" forever).
+    // Pick the highest version that is actually newer than the running one;
+    // pre-release candidates are surfaced with a warning instead of hidden.
+    let mut candidates: Vec<&serde_json::Value> = releases.iter()
+        .filter(|r| !r["draft"].as_bool().unwrap_or(false))
+        .collect();
+    candidates.sort_by(|a, b| {
+        let va = parse_semver(a["tag_name"].as_str().unwrap_or(""));
+        let vb = parse_semver(b["tag_name"].as_str().unwrap_or(""));
+        vb.cmp(&va)
+    });
+    let release = candidates.iter()
+        .find(|r| parse_semver(r["tag_name"].as_str().unwrap_or("")) > parse_semver(current))
         .ok_or_else(|| "No releases found".to_string())?;
 
     let tag = release["tag_name"].as_str().unwrap_or("").to_string();
     let ver = tag.trim_start_matches('v');
-    if parse_semver(ver) <= parse_semver(current) {
-        return Ok(None);
-    }
     let asset_url = release["assets"]
         .as_array()
         .and_then(|a| a.iter().find(|asset| {
@@ -473,9 +519,7 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
         .unwrap_or("")
         .to_string();
 
-    // Warn if stable user is offered a beta/pre-release
-    let new_type = version_type(ver);
-    let unstable_warning = current_type == "release" && new_type != "release";
+    let unstable_warning = release["prerelease"].as_bool().unwrap_or(false) || version_type(ver) != "release";
 
     Ok(Some(ReleaseInfo {
         version:  ver.to_string(),
@@ -610,6 +654,7 @@ fn get_window_type(window: tauri::WebviewWindow) -> String {
 
 #[tauri::command]
 async fn open_console_window(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let log_path = launcher::mlbv_base()
         .join("instances")
         .join(&instance_name)
@@ -649,42 +694,6 @@ fn get_console_info(app: tauri::AppHandle) -> Option<ConsoleInfo> {
     app.state::<ConsoleState>().info.lock().unwrap().clone()
 }
 
-#[derive(serde::Serialize)]
-struct PollResult {
-    lines: Vec<String>,
-    new_offset: u64,
-    cleared: bool,
-}
-
-#[tauri::command]
-fn poll_console(log_path: String, offset: u64) -> PollResult {
-    use std::io::{Read, Seek, SeekFrom};
-    let path = std::path::Path::new(&log_path);
-    if !path.exists() {
-        return PollResult { lines: vec![], new_offset: offset, cleared: false };
-    }
-    let mut file = match std::fs::File::open(path) {
-        Ok(f) => f,
-        Err(_) => return PollResult { lines: vec![], new_offset: offset, cleared: false },
-    };
-    let file_size = match file.metadata() {
-        Ok(m) => m.len(),
-        Err(_) => return PollResult { lines: vec![], new_offset: offset, cleared: false },
-    };
-    // File was truncated (new game launch rewrote latest.log) — read from start and signal clear
-    let truncated = file_size < offset;
-    let actual_offset = if truncated { 0 } else { offset };
-    if file_size == actual_offset {
-        return PollResult { lines: vec![], new_offset: actual_offset, cleared: false };
-    }
-    let _ = file.seek(SeekFrom::Start(actual_offset));
-    let mut content = String::new();
-    let _ = file.read_to_string(&mut content);
-    let new_offset = file.seek(SeekFrom::Current(0)).unwrap_or(file_size);
-    let lines: Vec<String> = content.lines().map(|l| l.to_string()).collect();
-    PollResult { lines, new_offset, cleared: truncated }
-}
-
 // ── JVM output streaming ────────────────────────────────────────────────────
 
 #[derive(serde::Serialize)]
@@ -713,6 +722,7 @@ fn poll_jvm_output(offset: usize, app: tauri::AppHandle) -> JvmPollResult {
 
 #[tauri::command]
 async fn install_lb_config(json_url: String, instance_name: String, file_name: String) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let client = reqwest::Client::builder()
         .user_agent("MLBV/1.0")
         .build()
@@ -770,6 +780,7 @@ struct FoundInstance {
     mc_version: Option<String>,
     loader: Option<String>,
     loader_version: Option<String>,
+    build_id: Option<u32>,
 }
 
 #[tauri::command]
@@ -791,6 +802,7 @@ fn scan_instances() -> Vec<FoundInstance> {
                     mc_version: v["mcVersion"].as_str().map(|s| s.to_string()),
                     loader: v["loader"].as_str().map(|s| s.to_string()),
                     loader_version: v["loaderVersion"].as_str().map(|s| s.to_string()),
+                    build_id: v["buildId"].as_u64().map(|n| n as u32),
                 });
                 continue;
             }
@@ -803,6 +815,7 @@ fn scan_instances() -> Vec<FoundInstance> {
             mc_version: None,
             loader: None,
             loader_version: None,
+            build_id: None,
         });
     }
     found
@@ -817,19 +830,39 @@ fn save_instance_metadata(
     mc_version: String,
     loader: String,
     loader_version: String,
+    build_id: Option<u32>,
 ) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let meta = serde_json::json!({
         "name": instance_name,
         "type": instance_type,
         "mcVersion": mc_version,
         "loader": loader,
         "loaderVersion": loader_version,
+        "buildId": build_id,
     });
     let path = launcher::instances_dir()
         .join(&instance_name)
         .join(".mlbv-instance.json");
     std::fs::create_dir_all(path.parent().unwrap()).map_err(|e| e.to_string())?;
     std::fs::write(&path, meta.to_string()).map_err(|e| e.to_string())
+}
+
+/// Rename the on-disk instance directory so a renamed instance keeps its
+/// saves/mods (without this, renaming only changed the UI label and the next
+/// launch silently started from a fresh, empty directory).
+#[tauri::command]
+fn rename_instance_data(old_name: String, new_name: String) -> Result<(), String> {
+    launcher::valid_instance_name(&old_name).map_err(|e| e.to_string())?;
+    launcher::valid_instance_name(&new_name).map_err(|e| e.to_string())?;
+    let base = launcher::instances_dir();
+    let old_dir = base.join(&old_name);
+    if !old_dir.exists() { return Ok(()); }
+    let new_dir = base.join(&new_name);
+    if new_dir.exists() {
+        return Err("Target instance directory already exists".to_string());
+    }
+    std::fs::rename(&old_dir, &new_dir).map_err(|e| format!("Rename failed: {e}"))
 }
 
 #[tauri::command]
@@ -845,6 +878,7 @@ async fn launch_fabric_game(
     concurrent_downloads: u32,
     max_ram_mb: u32,
 ) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     launcher::run_fabric(
         app, version_id, loader_version, instance_name, username, uuid, offline, access_token,
         concurrent_downloads, max_ram_mb,
@@ -858,6 +892,7 @@ struct ModInfo {
 
 #[tauri::command]
 fn list_mods(instance_name: String) -> Vec<ModInfo> {
+    if launcher::valid_instance_name(&instance_name).is_err() { return vec![]; }
     let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
     if !mods_dir.exists() { return vec![]; }
     std::fs::read_dir(&mods_dir)
@@ -875,6 +910,7 @@ fn list_mods(instance_name: String) -> Vec<ModInfo> {
 
 #[tauri::command]
 fn delete_mods(instance_name: String, filenames: Vec<String>) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
     for filename in &filenames {
         if filename.contains('/') || filename.contains('\\') { continue; }
@@ -888,6 +924,7 @@ fn delete_mods(instance_name: String, filenames: Vec<String>) -> Result<(), Stri
 
 #[tauri::command]
 fn add_mod_file(instance_name: String, filename: String, data: Vec<u8>) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let safe: String = filename.chars().filter(|&c| c != '/' && c != '\\' && c != '\0').collect();
     if !safe.ends_with(".jar") { return Err("Only .jar files are supported".to_string()); }
     let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
@@ -899,6 +936,7 @@ fn add_mod_file(instance_name: String, filename: String, data: Vec<u8>) -> Resul
 #[tauri::command]
 fn open_mods_folder(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
     use tauri_plugin_opener::OpenerExt;
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
     std::fs::create_dir_all(&mods_dir).map_err(|e| e.to_string())?;
     app.opener()
@@ -908,6 +946,7 @@ fn open_mods_folder(app: tauri::AppHandle, instance_name: String) -> Result<(), 
 
 #[tauri::command]
 fn delete_instance_data(instance_name: String) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let inst_dir = launcher::instances_dir().join(&instance_name);
     if inst_dir.exists() {
         std::fs::remove_dir_all(&inst_dir).map_err(|e| e.to_string())?;
@@ -1038,6 +1077,7 @@ async fn launch_quilt_game(
     concurrent_downloads: u32,
     max_ram_mb: u32,
 ) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     launcher::run_quilt(
         app, version_id, loader_version, instance_name, username, uuid, offline, access_token,
         concurrent_downloads, max_ram_mb,
@@ -1057,6 +1097,7 @@ async fn launch_forge_game(
     concurrent_downloads: u32,
     max_ram_mb: u32,
 ) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     launcher::run_forge(
         app, version_id, forge_version, instance_name, username, uuid, offline, access_token,
         concurrent_downloads, max_ram_mb,
@@ -1076,6 +1117,7 @@ async fn launch_neoforge_game(
     concurrent_downloads: u32,
     max_ram_mb: u32,
 ) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     launcher::run_neoforge(
         app, version_id, neoforge_version, instance_name, username, uuid, offline, access_token,
         concurrent_downloads, max_ram_mb,
@@ -1089,7 +1131,6 @@ pub fn run() {
         .manage(launcher::GameState::new())
         .manage(ConsoleState { info: std::sync::Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
-            check_version_installed,
             get_game_dir,
             launch_game,
             launch_lb_game,
@@ -1097,6 +1138,8 @@ pub fn run() {
             get_lb_branches,
             get_lb_versions,
             microsoft_login,
+            refresh_ms_token,
+            rename_instance_data,
             scan_java,
             download_java,
             stop_game,
@@ -1116,7 +1159,6 @@ pub fn run() {
             open_game_dir,
             open_console_window,
             get_console_info,
-            poll_console,
             poll_jvm_output,
             install_lb_config,
             get_lb_installable_instances,

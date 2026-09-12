@@ -19,28 +19,29 @@ self-update check.
 
 Facts about the current state:
 
-- **Status: frozen.** Last commit and release: `beta0.0.4`, dated 2026-06-14. There is no active
-  development. Do not assume features are being worked on.
-- 15 commits total, written in a single two-day sprint. History is squashed and unhelpful.
-- ~9 300 lines of first-party code: ~4 400 Rust, ~4 900 TypeScript/CSS.
+- **Status: frozen.** Last *release*: `beta0.0.4`, dated 2026-06-14. No feature development;
+  maintenance fixes (security, data integrity, broken updater) were applied on 2026-09-12 —
+  see §6 for what was fixed and what is still open.
+- History is squashed and unhelpful (original sprint: 15 commits over two days).
+- ~10 800 lines of first-party code: ~4 560 Rust, ~5 530 TypeScript/CSS.
 - **No tests, no linter, no formatter config.** CI compiles; it does not verify behaviour.
-- All published releases are marked as GitHub *pre-releases*, and the in-app updater can never see
-  them (see §6, landmine 9).
+- All published releases are marked as GitHub *pre-releases*. The updater now considers them
+  (fixed 2026-09-12; see §6, landmine 9).
 
 ### File map
 
 | Path | Lines | Role |
 |---|---|---|
-| `src-tauri/src/lib.rs` | ~1140 | Tauri commands: Microsoft auth, LiquidBounce API, update check, console window, instance scanning, mods, download controls, `run()` and the `generate_handler!` list |
-| `src-tauri/src/launcher.rs` | ~3250 | The launch pipelines (`run`, `run_lb`, `run_fabric`, `run_quilt`, `run_forge`, `run_neoforge`), Java provisioning, ZIP extraction, path helpers |
+| `src-tauri/src/lib.rs` | ~1180 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mods, download controls, `run()` and the `generate_handler!` list |
+| `src-tauri/src/launcher.rs` | ~3370 | The launch pipelines (`run`, `run_lb`, `run_fabric`, `run_quilt`, `run_forge`, `run_neoforge`), Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
 | `src-tauri/src/main.rs` | 6 | Windows entry point. Contains `windows_subsystem` — **do not touch** |
 | `src-tauri/tauri.conf.json` | 40 | Window, bundle targets, CSP, identifier |
 | `src-tauri/capabilities/*.json` | 34 | Tauri v2 permissions for the `main` and `console` windows |
-| `src/App.tsx` | ~2880 | The entire main UI, including every modal |
-| `src/SetupWizard.tsx` | ~550 | First-run wizard: language → prefs → account → Java |
+| `src/App.tsx` | ~2960 | The entire main UI, including every modal |
+| `src/SetupWizard.tsx` | ~545 | First-run wizard: language → prefs → account → Java |
 | `src/ConsoleWindow.tsx` | ~185 | Separate window that streams game output |
-| `src/LbConfigsPanel.tsx` | ~465 | LiquidBounce configs catalog (GitHub-backed) |
-| `src/i18n.ts` | ~700 | 514 EN/RU translation keys |
+| `src/LbConfigsPanel.tsx` | ~470 | LiquidBounce configs catalog (GitHub-backed, README sanitized with DOMPurify) |
+| `src/i18n.ts` | ~705 | 518 EN/RU translation keys |
 | `src/App.css` | ~1340 | All styling |
 | `src/main.tsx` | 25 | Picks `App` or `ConsoleWindow` by window label |
 | `.github/workflows/ci.yml` | 112 | The only way to compile Rust in a restricted environment (§4) |
@@ -237,14 +238,15 @@ update all of them and say so:
 
 | File | Field | Current value |
 |---|---|---|
-| `package.json` | `version` | `beta0.0.4` |
-| `package-lock.json` | `version` (2 places) | `0.0.4` — stale, `npm install` rewrites it |
+| `package.json` | `version` | `0.0.4` (was `beta0.0.4`, aligned 2026-09-12) |
+| `package-lock.json` | `version` (2 places) | `0.0.4` |
 | `src-tauri/tauri.conf.json` | `version` | `0.0.4` |
 | `src-tauri/Cargo.toml` | `version` | `0.0.4` (this is what `env!("CARGO_PKG_VERSION")` reports, and it drives the update check) |
 | `vite.config.ts` | `define.__APP_VERSION__` | `"0.0.4"` — hardcoded, shown in the About panel |
 
-Note the asymmetry: the About screen shows `__APP_VERSION__` (hardcoded in Vite), the debug panel
-shows `CARGO_PKG_VERSION`. A bump that misses either one produces two different versions in one UI.
+The values are in sync as of 2026-09-12. Note the asymmetry: the About screen shows
+`__APP_VERSION__` (hardcoded in Vite), the debug panel shows `CARGO_PKG_VERSION`. A bump that misses
+either one produces two different versions in one UI — update all five places.
 
 Releases are tagged `v0.0.x` or `beta0.0.x`; every release so far is a GitHub pre-release. The
 updater downloads `.exe` assets only.
@@ -252,57 +254,63 @@ updater downloads `.exe` assets only.
 ## 6. Landmines — verified problems, do not rediscover them
 
 Cite these instead of re-deriving, and fix one only if the task asks for it.
+Items marked **FIXED 2026-09-12** are resolved; the note explains the current mechanism so it is
+not accidentally "re-fixed" into a regression.
 
-1. **Microsoft tokens are never refreshed.** `refresh_token` is read (`lib.rs:113`) and returned to
-   the frontend (`lib.rs:184`), then dropped in `App.tsx:1783`; no refresh call exists anywhere.
-   Sessions die after ~24 h and the user must sign in again.
-2. **Instances are only in `localStorage`** (`App.tsx:1648`). `scan_instances` (`lib.rs:776`) and
-   `save_instance_metadata` (`lib.rs:814`) are implemented and never called; `.mlbv-instance.json`
-   is never written. Clearing WebView data loses the instance list while files stay on disk.
-3. **`instance_name` is unvalidated and used as a path segment.** It comes from `localStorage` and
-   reaches `join()` and `remove_dir_all` (`delete_instance_data` `lib.rs:910`, `reinstall_instance`
-   `lib.rs:383`). File names are sanitised (`add_mod_file`), instance names are not. Any fix here is
-   security-relevant; add a whitelist in Rust, not only in the UI.
-4. **Downloads are unverified and buffered in RAM.** `download_file` (`launcher.rs:2773`) reads the
-   whole body into memory, `is_valid_file` (`launcher.rs:2765`) compares size only — the SHA-1
-   values in the manifests are ignored. Several call sites swallow errors with
-   `let _ = download_file(...)` (e.g. `launcher.rs:396`), which turns network failures into
-   confusing in-game crashes.
-5. **Live download speed only counts assets.** `dl_bytes` is incremented solely inside
-   `download_assets_parallel` (`launcher.rs:257`); libraries, Java, JARs and mods are invisible to
-   the speed readout.
-6. **51 of 75 progress strings in `launcher.rs` are hardcoded Russian** (e.g. `launcher.rs:869`,
-   `894`, `896`, `2647`, `2677`). The app has 514 i18n keys; the backend bypasses them. Any
-   user-visible string added in Rust must be discussed with the user, since there is no mechanism
-   to translate it.
-7. **Six near-identical pipelines** — `run` (`launcher.rs:272`), `run_lb` (`674`),
-   `run_fabric` (`1079`), `run_quilt` (`1449`), `run_forge` (`1766`),
-   `run_neoforge` (`2187`). ~2 000 of 3 250 lines are duplication, and fixes land in some copies
-   only. Consolidate only when asked; if asked, do it as one mechanical change with a diff review.
-8. **Legacy assets are not mapped.** Nothing copies objects into `assets/virtual/legacy/` for
-   pre-1.7 versions (grep for `virtual` returns nothing), so old versions can start without
-   textures or sounds. Also, `assetIndex` and `downloads` in `VersionJson` (`launcher.rs:63,64`)
-   are non-optional — verify against real Mojang JSON before changing their types.
-9. **The in-app update check can never fire.** `version_type("0.0.4")` classifies the running build
-   as a *release* (`lib.rs:424`), so `check_for_update` filters out every release that is marked
-   pre-release (`lib.rs:455`). All four published releases are pre-releases, so the command returns
-   `Err("No releases found")`, and the frontend swallows it (`.catch(() => {})`, `App.tsx:1767`).
-10. **One game process at a time.** `GameState` holds a single `child` slot (`launcher.rs:13`);
-    starting a second instance orphans the first from the UI.
-11. **No CSP, devtools in release builds, third-party Markdown rendered as HTML.**
-    `csp: null` (`tauri.conf.json:26`), `features = ["devtools"]` (`Cargo.toml:21`),
-    `dangerouslySetInnerHTML` on rendered README content (`LbConfigsPanel.tsx:350`) produced with
-    unsanitised `marked` (`LbConfigsPanel.tsx:71`). Do not widen this surface.
-12. **`poll_jvm_output` is unbounded.** `GameState.jvm_lines` grows forever; long sessions
-    accumulate memory.
+1. **FIXED 2026-09-12 — Microsoft token refresh.** The refresh token is now stored in the account
+   (`App.tsx` `Account.refreshToken`/`tokenAt`, same in `SetupWizard.tsx`), and `handlePlay`
+   re-runs the chain via the `refresh_ms_token` command (`lib.rs`) when the session is >20 h old.
+   `microsoft_login` and `refresh_ms_token` share `ms_token_chain`. Microsoft rotates refresh
+   tokens — the frontend persists the new one from the response.
+2. **FIXED 2026-09-12 — instance persistence.** `save_instance_metadata` is called on
+   add/rename (`persistInstance` in `App.tsx`), `scan_instances` runs on startup and recovers
+   directories missing from localStorage. Renaming also moves the on-disk directory
+   (`rename_instance_data`, `lib.rs`). Residual: recovery without a metadata file is a filesystem
+   guess (LB instances lose `buildId`).
+3. **FIXED 2026-09-12 — instance name validation.** `launcher::valid_instance_name` (whitelist:
+   ASCII alnum + space `_- . +`, length 1–64, no leading dot, no Windows device names) is called at
+   the entry of every command that takes `instance_name` (`lib.rs`). Do not move it to the UI.
+4. **FIXED 2026-09-12 — verified streaming downloads.** `download_file` (`launcher.rs`) streams
+   to a `.part` file, checks size + SHA-1 (when the manifest has one) and renames on success.
+   Call sites propagate errors; the remaining `let _ =` sites are deliberate best-effort (single
+   asset objects, optional extra LB mods) and carry a comment.
+5. **FIXED 2026-09-12 — speed readout coverage.** Every streaming download (assets, libraries,
+   natives, JARs, loader libs, mods, Java) increments the shared `dl_bytes` counter.
+6. **FIXED 2026-09-12 — backend strings are English.** All hardcoded Russian user-visible strings
+   in `launcher.rs` were translated to English (the backend has no i18n mechanism). The rule
+   remains: any user-visible string added in Rust must be discussed with the user.
+7. **STILL OPEN — six near-identical pipelines** — `run` (`launcher.rs:327`), `run_lb` (`734`),
+   `run_fabric` (`1140`), `run_quilt` (`1484`), `run_forge` (`1801`), `run_neoforge` (`2225`).
+   ~2 000 of 3 370 lines are duplication, and fixes land in some copies only. Consolidate only
+   when asked; if asked, do it as one mechanical change with a diff review.
+8. **FIXED 2026-09-12 — legacy assets.** `AssetIndex` now parses `map_to_resources`, and
+   `map_legacy_assets` (called from `download_assets_parallel`) hard-links each object into
+   `assets/virtual/legacy/<index key>` for pre-1.7.3 indexes. `assetIndex`/`downloads` in
+   `VersionJson` are non-optional — verify against real Mojang JSON before changing their types.
+9. **FIXED 2026-09-12 — updater.** `check_for_update` (`lib.rs`) considers all non-draft
+   releases, sorts by semver and returns the newest one newer than `CARGO_PKG_VERSION`;
+   pre-release candidates set `unstable_warning`. Check failures are shown in Settings → About
+   (no more silent `.catch(() => {})`).
+10. **STILL OPEN — one game process at a time.** `GameState` holds a single `child` slot
+    (`launcher.rs:14`); starting a second instance orphans the first from the UI. A fix is a
+    per-instance process registry + frontend changes — needs a design decision and runtime testing.
+11. **FIXED 2026-09-12 — CSP / devtools / Markdown.** CSP is set in `tauri.conf.json`
+    (`default-src 'self'`, no inline scripts, fonts from Google Fonts allowed — the page loads
+    Inter from fonts.googleapis.com); the `devtools` cargo feature is removed (release builds have
+    no DevTools; `tauri dev` keeps it); config READMEs are sanitized with DOMPurify before
+    `dangerouslySetInnerHTML` (`LbConfigsPanel.tsx` `renderMd`). **Not runtime-verified:** whether
+    the configured CSP is also applied to the dev server pages (may degrade Vite fast-refresh in
+    `tauri dev`) — smoke-test on Windows after this change.
+12. **FIXED 2026-09-12 — bounded JVM output.** `jvm_lines` is capped at `JVM_LINES_CAP` (20 000)
+    via `jvm_push`; older lines are dropped from the front (full history stays in `latest.log`).
+    The poll-offset protocol degrades gracefully (a stale offset simply reads as "caught up").
 
 ### Dead code — do not assume it is wired up
 
-Commands present in `generate_handler!` but never invoked from the frontend:
-`check_version_installed` (`lib.rs:276`), `poll_console` (`lib.rs:660`, superseded by
-`poll_jvm_output`), `scan_instances` (`lib.rs:776`), `save_instance_metadata` (`lib.rs:814`).
-Frontend leftovers: `public/vite.svg`, `public/tauri.svg`, `src/assets/react.svg` are unused
-template files.
+As of 2026-09-12: `check_version_installed` and `poll_console` were removed (never invoked);
+`scan_instances` / `save_instance_metadata` are now called from `App.tsx`. `public/vite.svg` is
+the favicon (in use — do not delete); `public/tauri.svg` and `src/assets/react.svg` were removed
+as unused template leftovers. If you add a command, invoke it or do not add it.
 
 ## 7. Sources to consult when unsure
 

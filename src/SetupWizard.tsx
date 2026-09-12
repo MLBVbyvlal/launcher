@@ -10,7 +10,7 @@ const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const spring   = { type: 'spring', stiffness: 340, damping: 28 } as const
 const JAVA_MAJORS = [8, 17, 21, 25] as const
 
-type Account    = { type: 'offline' | 'microsoft'; username: string; uuid: string; accessToken?: string }
+type Account    = { type: 'offline' | 'microsoft'; username: string; uuid: string; accessToken?: string; refreshToken?: string; tokenAt?: number }
 type StepId     = 'welcome' | 'prefs' | 'account' | 'offline-warn' | 'nick' | 'nick-warn' | 'ms-loading' | 'java'
 type JavaStatus = 'pending' | 'already' | 'downloading' | 'installing' | 'done' | 'error'
 interface JavaDl { major: number; status: JavaStatus; progress: number; message: string }
@@ -197,9 +197,10 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
     goTo('ms-loading')
     setMsError('')
     try {
-      type Raw = { username: string; uuid: string; access_token: string }
+      type Raw = { username: string; uuid: string; access_token: string; refresh_token: string }
       const raw = await invoke<Raw>('microsoft_login')
-      pendingAccount.current = { type: 'microsoft', username: raw.username, uuid: raw.uuid, accessToken: raw.access_token }
+      // Keep the refresh token so the session can outlive the 24 h access token.
+      pendingAccount.current = { type: 'microsoft', username: raw.username, uuid: raw.uuid, accessToken: raw.access_token, refreshToken: raw.refresh_token, tokenAt: Date.now() }
       goTo('java')
     } catch (e) {
       setMsError(String(e))
