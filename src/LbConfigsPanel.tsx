@@ -2,6 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { invoke } from '@tauri-apps/api/core'
 import { marked } from 'marked'
+import DOMPurify from 'dompurify'
 import { getLang, useT } from './i18n'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -69,7 +70,12 @@ function firstImage(md: string): string {
 
 function renderMd(md: string): string {
   marked.setOptions({ breaks: true, gfm: true } as Parameters<typeof marked.setOptions>[0])
-  return marked.parse(md) as string
+  const html = marked.parse(md) as string
+  // READMEs come from a third-party GitHub repo (MLBVbyvlal/lbconfig) — strip
+  // <script>, event handlers and other executable surface before this reaches
+  // the DOM. Without sanitizing, a malicious README would run JS inside the
+  // launcher's WebView (with @tauri-apps/api available in page context).
+  return DOMPurify.sanitize(html, { USE_PROFILES: { html: true } })
 }
 
 function getInstalled(): InstalledMap {

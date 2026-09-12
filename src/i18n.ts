@@ -135,6 +135,7 @@ const S: Record<Lang, Record<string, string>> = {
     'settings.check_updates': 'Check for updates',
     'settings.checking': 'Checking…',
     'settings.up_to_date': "You're up to date",
+    'settings.update_check_failed': 'Update check failed:',
     'settings.update_available': 'available',
     'settings.stack': 'Tauri v2 · Rust · React · TypeScript',
     'settings.disclaimer': 'This launcher is not affiliated with, sponsored by, or endorsed by the LiquidBounce team or CCBlueX.',
@@ -325,6 +326,9 @@ const S: Record<Lang, Record<string, string>> = {
     'loader.no_releases': 'No releases for this Minecraft version',
     'loader.beta_label': 'beta',
 
+    // Launch status
+    'launch.checking_loader': 'Checking {0} for MC {1}…',
+
     // Update modal — unstable warning
     'update.unstable_warn': '⚠ Unstable version.',
     'update.unstable_body': 'This is a beta or pre-release — may contain serious bugs and unstable behavior. We recommend waiting for a stable release.',
@@ -476,6 +480,7 @@ const S: Record<Lang, Record<string, string>> = {
     'settings.check_updates': 'Проверить обновления',
     'settings.checking': 'Проверяем…',
     'settings.up_to_date': 'Обновлений нет',
+    'settings.update_check_failed': 'Не удалось проверить обновления:',
     'settings.update_available': 'доступно',
     'settings.stack': 'Tauri v2 · Rust · React · TypeScript',
     'settings.disclaimer': 'Этот лаунчер не является аффилированным, спонсируемым или одобренным командой LiquidBounce или CCBlueX.',
@@ -665,6 +670,9 @@ const S: Record<Lang, Record<string, string>> = {
     'loader.filter.all': 'Все',
     'loader.no_releases': 'Нет релизов для этой версии MC',
     'loader.beta_label': 'бета',
+
+    // Launch status
+    'launch.checking_loader': 'Проверяем {0} для MC {1}…',
 
     // Update modal — unstable warning
     'update.unstable_warn': '⚠ Нестабильная версия.',

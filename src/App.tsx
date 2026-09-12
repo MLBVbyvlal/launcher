@@ -12,7 +12,7 @@ import './App.css'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
-type Account   = { type: 'offline' | 'microsoft'; username: string; uuid: string; accessToken?: string }
+type Account   = { type: 'offline' | 'microsoft'; username: string; uuid: string; accessToken?: string; refreshToken?: string; tokenAt?: number }
 type MCVersion = { id: string; type: 'release' | 'snapshot' | 'old_alpha' | 'old_beta'; releaseTime: string }
 type LBVersion = { tag: string; mcVersion: string; date: string; buildId?: number }
 type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number; loader?: 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'; loaderVersion?: string }
@@ -175,7 +175,7 @@ const RAM_MARKS = [
 
 type SettingsTab = 'general' | 'performance' | 'java' | 'about' | 'customize' | 'danger'
 
-function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangChange?: (l: Lang) => void }) {
+function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: () => void; onLangChange?: (l: Lang) => void; updateCheckError?: string | null }) {
   const [localLang, setLocalLang] = useState<Lang>(getLang)
   const t = useT(localLang)
   const handleLangChange = (l: Lang) => {
@@ -195,7 +195,7 @@ function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangC
   const [dangerOpen, setDangerOpen]         = useState(false)
   const [countdown, setCountdown]           = useState(5)
   const [deleting, setDeleting]             = useState(false)
-  const [updateStatus, setUpdateStatus]     = useState<'idle' | 'checking' | 'uptodate' | { version: string; htmlUrl: string }>('idle')
+  const [updateStatus, setUpdateStatus]     = useState<'idle' | 'checking' | 'uptodate' | { version: string; htmlUrl: string } | { error: string }>('idle')
 
   // Customization
   const [customAccent, setCustomAccent] = useState(() => localStorage.getItem('mlbv_accent') ?? DEFAULT_ACCENT)
@@ -269,8 +269,8 @@ function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangC
       type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string }
       const r = await invoke<RawRelease | null>('check_for_update')
       setUpdateStatus(r ? { version: r.version, htmlUrl: r.html_url } : 'uptodate')
-    } catch {
-      setUpdateStatus('idle')
+    } catch (e) {
+      setUpdateStatus({ error: String(e) })
     }
   }
 
@@ -502,7 +502,7 @@ function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangC
                       {updateStatus === 'uptodate' && (
                         <span className="about-update-ok">{t('settings.up_to_date')}</span>
                       )}
-                      {typeof updateStatus === 'object' && (
+                      {typeof updateStatus === 'object' && 'version' in updateStatus && (
                         <span className="about-update-avail">
                           v{updateStatus.version} {t('settings.update_available')} —{' '}
                           <button className="about-update-link"
@@ -510,6 +510,12 @@ function SettingsModal({ onClose, onLangChange }: { onClose: () => void; onLangC
                             {t('update.download')}
                           </button>
                         </span>
+                      )}
+                      {typeof updateStatus === 'object' && 'error' in updateStatus && (
+                        <span className="about-update-err">{t('settings.update_check_failed')} {updateStatus.error}</span>
+                      )}
+                      {updateCheckError && !(typeof updateStatus === 'object' && 'error' in updateStatus) && (
+                        <span className="about-update-err">{t('settings.update_check_failed')} {updateCheckError}</span>
                       )}
                     </div>
                     <DebugInfoBlock />
@@ -1698,6 +1704,7 @@ export default function App() {
 
   // Update check
   const [updateInfo, setUpdateInfo]           = useState<UpdateInfo | null>(null)
+  const [updateCheckError, setUpdateCheckError] = useState<string | null>(null)
   const [justUpdated, setJustUpdated]         = useState<string | null>(null)
 
   // Crash dialog
@@ -1765,8 +1772,11 @@ export default function App() {
       .catch(() => {})
     type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string; unstable_warning: boolean }
     invoke<RawRelease | null>('check_for_update')
-      .then(r => { if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, unstableWarning: r.unstable_warning }) })
-      .catch(() => {})
+      .then(r => {
+        setUpdateCheckError(null)
+        if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, unstableWarning: r.unstable_warning })
+      })
+      .catch(e => setUpdateCheckError(String(e)))
   }, [appState])
 
   // ── Accounts ─────────────────────────────────────────────────────────────
@@ -1782,18 +1792,62 @@ export default function App() {
     try {
       type Raw = { username: string; uuid: string; access_token: string; refresh_token: string }
       const raw = await invoke<Raw>('microsoft_login')
-      const acct: Account = { type: 'microsoft', username: raw.username, uuid: raw.uuid, accessToken: raw.access_token }
+      // Keep the refresh token: MC access tokens expire in ~24 h and it is
+      // the only way to extend the session without a full re-login.
+      const acct: Account = { type: 'microsoft', username: raw.username, uuid: raw.uuid, accessToken: raw.access_token, refreshToken: raw.refresh_token, tokenAt: Date.now() }
       setAccounts(prev => [...prev.filter(a => a.uuid !== acct.uuid), acct])
       setSelected(acct); setShowAddAcct(false)
     } catch (err) { setMsError(String(err)) }
     setMsLoading(false)
   }
 
+  // ── Instance persistence (disk metadata) ──────────────────────────────────
+  // localStorage alone loses the instance list when WebView data is cleared
+  // while the game dirs stay on disk. Mirror each instance into its dir as
+  // .mlbv-instance.json and recover missing ones on startup.
+  const persistInstance = (inst: Instance) => {
+    if (!isTauri) return
+    invoke('save_instance_metadata', {
+      instanceName: inst.name,
+      instanceType: inst.type,
+      mcVersion: inst.mcVersion,
+      loader: inst.loader ?? 'vanilla',
+      loaderVersion: inst.loaderVersion ?? '',
+      buildId: inst.buildId ?? null,
+    }).catch(() => {})
+  }
+
+  useEffect(() => {
+    if (!isTauri || appState !== 'ready') return
+    type Found = { name: string; instance_type: string; mc_version: string | null; loader: string | null; loader_version: string | null; build_id: number | null }
+    invoke<Found[]>('scan_instances')
+      .then(found => {
+        setInstances(prev => {
+          const known = new Set(prev.map(i => i.name))
+          const recovered: Instance[] = found
+            .filter(f => !known.has(f.name))
+            .map(f => ({
+              id: crypto.randomUUID(),
+              name: f.name,
+              type: (f.instance_type === 'lb' ? 'lb' : 'mc') as 'mc' | 'lb',
+              version: f.mc_version ?? 'Unknown',
+              mcVersion: f.mc_version ?? '',
+              loader: (f.loader && f.loader !== 'vanilla' ? f.loader : 'vanilla') as Instance['loader'],
+              loaderVersion: f.loader_version ?? undefined,
+              buildId: f.build_id ?? undefined,
+            }))
+          return recovered.length ? [...prev, ...recovered] : prev
+        })
+      })
+      .catch(() => {})
+  }, [appState])
+
   // ── Instance management ───────────────────────────────────────────────────
   const addInstance = (inst: Instance) => {
     setInstances(prev => [...prev, inst])
     if (inst.type === 'mc') setActiveMcInstId(inst.id)
     else setActiveLbInstId(inst.id)
+    persistInstance(inst)
   }
 
   const removeInstance = (id: string) => {
@@ -1806,7 +1860,14 @@ export default function App() {
     const trimmed = newName.trim()
     if (!trimmed) return
     if (instances.some(i => i.id !== id && i.name === trimmed)) return
+    const old = instances.find(i => i.id === id)
+    if (!old || old.name === trimmed) return
     setInstances(prev => prev.map(i => i.id === id ? { ...i, name: trimmed } : i))
+    // Move the on-disk dir too — otherwise saves/mods stay in the old dir and
+    // the next launch starts from a fresh empty instance.
+    const renamed: Instance = { ...old, name: trimmed }
+    if (isTauri) invoke('rename_instance_data', { oldName: old.name, newName: trimmed }).catch(() => {})
+    persistInstance(renamed)
   }
 
   const handleCtxAction = (action: CtxAction, inst: Instance) => {
@@ -1901,6 +1962,23 @@ export default function App() {
     setDlPaused(false); setDlSpeedBps(0)
     lastLaunchedInst.current = activeInstance
 
+    // Extend the Microsoft session when it is close to expiry (MC access
+    // tokens live ~24 h). The refresh response rotates the refresh token,
+    // so both tokens get persisted.
+    let acct: Account = selected
+    if (isTauri && selected.type === 'microsoft' && selected.refreshToken) {
+      const ageH = (Date.now() - (selected.tokenAt ?? 0)) / 3_600_000
+      if (ageH > 20) {
+        try {
+          type RawRefresh = { username: string; uuid: string; access_token: string; refresh_token: string }
+          const raw = await invoke<RawRefresh>('refresh_ms_token', { refreshToken: selected.refreshToken })
+          acct = { ...selected, accessToken: raw.access_token, refreshToken: raw.refresh_token, tokenAt: Date.now() }
+          setAccounts(prev => prev.map(a => a.uuid === acct.uuid ? acct : a))
+          setSelected(acct)
+        } catch { /* keep the current token; if it is dead the server rejects the login and the user signs in again */ }
+      }
+    }
+
     if (isTauri) {
       const unlisten = await listen<{ stage: string; progress: number; message: string }>(
         'launch-progress', evt => {
@@ -1975,7 +2053,7 @@ export default function App() {
             // ─ Loader compatibility pre-check ────────────────────────────
             const loader = resolvedInst.loader
             if (loader && loader !== 'vanilla') {
-              setStatus(`Проверяем ${loader} для MC ${resolvedInst.mcVersion}…`)
+              setStatus(t('launch.checking_loader').replace('{0}', loader).replace('{1}', resolvedInst.mcVersion))
               try {
                 const loaderVersions = await invoke<LoaderVersionInfo[]>('get_loader_versions', {
                   mcVer: resolvedInst.mcVersion,
@@ -1992,10 +2070,10 @@ export default function App() {
 
         const baseArgs = {
           instanceName: resolvedInst.name,
-          username: selected.username,
-          uuid: selected.uuid,
-          offline: selected.type === 'offline',
-          accessToken: selected.type === 'offline' ? '0' : (selected.accessToken ?? ''),
+          username: acct.username,
+          uuid: acct.uuid,
+          offline: acct.type === 'offline',
+          accessToken: acct.type === 'offline' ? '0' : (acct.accessToken ?? ''),
           concurrentDownloads: concurrentDl,
           maxRamMb: ramMb,
         }
@@ -2648,7 +2726,7 @@ export default function App() {
 
         {/* ── SETTINGS MODAL ── */}
         <AnimatePresence>
-          {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onLangChange={l => setLang(l)} />}
+          {showSettings && <SettingsModal onClose={() => setShowSettings(false)} onLangChange={l => setLang(l)} updateCheckError={updateCheckError} />}
         </AnimatePresence>
 
         {/* ── INSTANCE CONTEXT MENU ── */}

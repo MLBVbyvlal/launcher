@@ -18,7 +18,9 @@ crate-type = ["staticlib", "cdylib", "rlib"]
 tauri-build = { version = "2", features = [] }
 
 [dependencies]
-tauri = { version = "2", features = ["devtools"] }
+# devtools feature removed: it shipped DevTools in release builds (landmine).
+# DevTools stay available in debug builds (tauri dev) without it.
+tauri = { version = "2", features = [] }
 url = "2"
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
@@ -27,4 +29,7 @@ reqwest = { version = "0.12", features = ["json"] }
 tokio = { version = "1", features = ["net", "io-util", "time", "sync", "rt"] }
 anyhow = "1"
 zip = "0.6"
+# std has no SHA-1; Mojang manifests publish SHA-1 hashes used to verify
+# client JARs, libraries and assets after download.
+sha1 = "0.10"
 

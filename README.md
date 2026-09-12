@@ -16,9 +16,10 @@ MLBV is a custom Minecraft launcher for Windows: a Tauri 2 app with a Rust backe
 frontend. It handles what the official launcher does — accounts, versions, assets, libraries, Java —
 plus per-instance isolation, five mod loaders, and LiquidBounce as a first-class option.
 
-**Status: frozen beta.** The last commit and release are from **14 June 2026** (`beta0.0.4`).
-There is no active development. The code is published as-is; see [Known limitations](#known-limitations)
-for a verified list of what does not work. Issues and pull requests may go unanswered.
+**Status: frozen beta.** The last release is **`beta0.0.4`**, dated 14 June 2026. There is no
+scheduled development; maintenance fixes (security, data integrity, broken updater) land on `main`
+between releases. See [Known limitations](#known-limitations) for a verified list of what does not
+work. Issues and pull requests may go unanswered.
 
 ---
 
@@ -44,7 +45,9 @@ for a verified list of what does not work. Issues and pull requests may go unans
 - **Microsoft** login through the real OAuth flow: an embedded WebView opens, you sign in normally,
   the redirect is intercepted inside the app. No credentials are stored, nothing is proxied.
 - **Offline / guest** accounts for servers that do not require authentication.
-- Multiple accounts, switch between them without re-authenticating.
+- Multiple accounts, switch between them without re-authenticating. Microsoft sessions extend
+  themselves: the refresh token is kept, and ~20 h after a sign-in the next launch transparently
+  re-runs the Xbox→XSTS→Minecraft chain, so you are not re-logged-in every 24 h.
 
 ### Instances
 - Unlimited instances; each one is a separate game directory with its own mods, configs, saves,
@@ -67,9 +70,13 @@ for a verified list of what does not work. Issues and pull requests may go unans
 
 ### Downloads
 - Parallel asset downloads, configurable from 1 to 50 connections.
-- Live speed readout, pause/resume mid-download, cancel.
+- Live speed readout covering assets, libraries, JARs, mods and Java, with pause/resume and cancel.
+- Downloads stream to disk (a `.part` file that is renamed on success) and are verified against
+  the manifest size and SHA-1 when the manifest provides one.
 - Progress is reported per stage (client JAR, libraries, assets, Java, launch).
 - Shared cache: libraries, assets and version JARs are downloaded once and reused across instances.
+- Pre-1.7.3 asset indexes (`map_to_resources`) are mapped into `assets/virtual/legacy/` so old
+  versions start with their textures and sounds.
 
 ### LiquidBounce
 - Branches and builds are fetched from the official LiquidBounce API; you pick a branch and a
@@ -191,28 +198,18 @@ The launcher talks to these endpoints directly. None of them are proxied through
 
 Verified against the code, not guessed:
 
-1. **Microsoft sessions expire and cannot be refreshed.** `refresh_token` is obtained from the auth
-   chain and passed to the frontend, which drops it; there is no refresh call anywhere. Expect to
-   sign in again roughly every 24 hours, after which multiplayer reports an invalid session.
-2. **The instance list lives only in `localStorage`.** `scan_instances` and `save_instance_metadata`
-   exist in Rust but are never called, and `.mlbv-instance.json` is never written. If WebView data
-   is cleared, the launcher shows an empty list while the gigabytes stay on disk.
-3. **Downloads are not checksum-verified and are buffered in memory.** SHA-1 values from the
-   manifests are ignored, so a truncated file is only re-downloaded when its size differs; some
-   download errors inside library loops are swallowed, which can surface later as a game crash.
-4. **Legacy assets are not mapped.** For versions before 1.7 (asset index `legacy` / `pre-1.6`) the
-   launcher downloads objects but never copies them into `assets/virtual/legacy/`, so old versions
-   may start without textures and sounds.
-5. **Auto-update is Windows-only** (NSIS silent install `/S /D=`), and in `beta0.0.4` it can never
-   find an update: the running version string parses as a *release*, while every published GitHub
-   release is marked as a *pre-release*, so the check is filtered down to nothing and the error is
-   swallowed by the UI.
-6. **One game process at a time.** The backend keeps a single `child` slot, so launching a second
+1. **Auto-update is Windows-only** (NSIS silent install `/S /D=`). The check considers all non-draft
+   GitHub releases and offers the newest one that is newer than the running build; candidates marked
+   pre-release are shown with a warning. Check failures are no longer swallowed silently — they are
+   shown in Settings → About.
+2. **One game process at a time.** The backend keeps a single `child` slot, so launching a second
    instance stops tracking the first.
-7. **No tests and no linter.** CI compiles the project; it does not verify behaviour.
-8. **Reinstall / delete operate on the instance name from `localStorage`** with no validation, and
-   the app ships with `csp: null` and renders third-party Markdown through `dangerouslySetInnerHTML`.
-   Do not point this build at untrusted catalogs.
+3. **No tests and no linter.** CI compiles the project; it does not verify behaviour.
+4. **Instance recovery is name-based.** If a `.mlbv-instance.json` metadata file is missing or
+   corrupt, a recovered instance falls back to a filesystem guess (LiquidBounce instances lose their
+   build id and must be re-picked before launching).
+5. **Renaming an instance moves its directory.** On an existing install, instances created before
+   the rename fix keep their old directory until renamed or reinstalled once.
 
 ## Screenshots
 
