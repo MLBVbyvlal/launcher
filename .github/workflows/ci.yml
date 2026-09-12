@@ -65,7 +65,19 @@ jobs:
 
       - name: cargo check --locked --all-targets
         working-directory: src-tauri
-        run: cargo check --locked --all-targets
+        run: |
+          cargo check --locked --all-targets --message-format=short 2>&1 | tee /tmp/check.txt
+          exit "${PIPESTATUS[0]}"
+
+      # Raw job logs live on *.blob.core.windows.net, which restricted sandboxes
+      # cannot reach; annotations are served from api.github.com instead, so a
+      # failing compile stays readable without downloading the log.
+      - name: Surface compiler errors as annotations
+        if: failure()
+        run: |
+          grep -E '^[^ ].*: (error|warning)(\[|:)' /tmp/check.txt | head -60 | while IFS= read -r line; do
+            echo "::error::${line}"
+          done
 
   # ── 3. Real Windows installer — the artifact that actually ships ───────────
   build-windows:
