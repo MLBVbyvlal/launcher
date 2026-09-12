@@ -326,29 +326,17 @@ fn get_game_dir() -> String {
     launcher::shared_data_dir().to_string_lossy().into_owned()
 }
 
+/// One launch command for every loader: `loader` selects the pipeline and
+/// `loader_version` / `lb_build_id` carry what that loader needs.
+/// `loader_version` is the Fabric/Quilt loader version or the full
+/// Forge/NeoForge version; an empty string means "pick the newest stable".
 #[tauri::command]
 async fn launch_game(
     app: tauri::AppHandle,
-    version_id: String,
-    instance_name: String,
-    username: String,
-    uuid: String,
-    offline: bool,
-    access_token: String,
-    concurrent_downloads: u32,
-    max_ram_mb: u32,
-) -> Result<(), String> {
-    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
-    launcher::run(app, version_id, instance_name, username, uuid, offline, access_token, concurrent_downloads, max_ram_mb)
-        .await
-        .map_err(|e| format!("{:#}", e))
-}
-
-#[tauri::command]
-async fn launch_lb_game(
-    app: tauri::AppHandle,
-    build_id: u32,
+    loader: launcher::Loader,
     mc_version: String,
+    loader_version: String,
+    lb_build_id: u32,
     instance_name: String,
     username: String,
     uuid: String,
@@ -358,9 +346,21 @@ async fn launch_lb_game(
     max_ram_mb: u32,
 ) -> Result<(), String> {
     launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
-    launcher::run_lb(app, build_id, mc_version, instance_name, username, uuid, offline, access_token, concurrent_downloads, max_ram_mb)
-        .await
-        .map_err(|e| format!("{:#}", e))
+    launcher::launch(app, launcher::LaunchRequest {
+        loader,
+        mc_version,
+        loader_version,
+        lb_build_id,
+        instance_name,
+        username,
+        uuid,
+        offline,
+        access_token,
+        concurrent_downloads,
+        max_ram_mb,
+    })
+    .await
+    .map_err(|e| format!("{e:#}"))
 }
 
 #[tauri::command]
@@ -379,15 +379,19 @@ async fn download_java(app: tauri::AppHandle, major: u32) -> Result<(), String> 
 }
 
 #[tauri::command]
-async fn stop_game(app: tauri::AppHandle) -> Result<(), String> {
+async fn stop_game(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
+    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let state = app.state::<launcher::GameState>();
-    let mut guard = state.child.lock().map_err(|_| "lock error")?;
-    if let Some(ref mut child) = *guard {
-        child.kill().map_err(|e| format!("Kill failed: {e}"))?;
-        *guard = None;
-    }
-    drop(guard);
-    let _ = app.emit("game-running", false);
+    let mut children = state.children.lock().map_err(|_| "lock error")?;
+    let Some(mut child) = children.remove(&instance_name) else { return Ok(()) };
+    drop(children);
+    let killed = child.kill().map_err(|e| format!("Kill failed: {e}"));
+    // The exit watcher is gone with the registry entry, so emit here.
+    let _ = app.emit("game-running", serde_json::json!({
+        "instance": instance_name,
+        "running": false,
+    }));
+    killed?;
     Ok(())
 }
 
@@ -704,9 +708,17 @@ struct JvmPollResult {
 }
 
 #[tauri::command]
-fn poll_jvm_output(offset: usize, app: tauri::AppHandle) -> JvmPollResult {
+fn poll_jvm_output(offset: usize, instance_name: String, app: tauri::AppHandle) -> JvmPollResult {
+    if launcher::valid_instance_name(&instance_name).is_err() {
+        return JvmPollResult { lines: vec![], new_offset: offset, cleared: false };
+    }
     let state = app.state::<launcher::GameState>();
-    let lines = state.jvm_lines.lock().unwrap();
+    let buffers = state.jvm_buffers.lock().unwrap();
+    let Some(buffer) = buffers.get(&instance_name) else {
+        // Nothing launched in this session: the console has no source yet.
+        return JvmPollResult { lines: vec![], new_offset: 0, cleared: offset > 0 };
+    };
+    let lines = buffer.lock().unwrap();
     if offset > 0 && lines.is_empty() {
         return JvmPollResult { lines: vec![], new_offset: 0, cleared: true };
     }
@@ -863,26 +875,6 @@ fn rename_instance_data(old_name: String, new_name: String) -> Result<(), String
         return Err("Target instance directory already exists".to_string());
     }
     std::fs::rename(&old_dir, &new_dir).map_err(|e| format!("Rename failed: {e}"))
-}
-
-#[tauri::command]
-async fn launch_fabric_game(
-    app: tauri::AppHandle,
-    version_id: String,
-    loader_version: String,
-    instance_name: String,
-    username: String,
-    uuid: String,
-    offline: bool,
-    access_token: String,
-    concurrent_downloads: u32,
-    max_ram_mb: u32,
-) -> Result<(), String> {
-    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
-    launcher::run_fabric(
-        app, version_id, loader_version, instance_name, username, uuid, offline, access_token,
-        concurrent_downloads, max_ram_mb,
-    ).await.map_err(|e| e.to_string())
 }
 
 #[derive(serde::Serialize)]
@@ -1064,66 +1056,6 @@ async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<Loade
     }
 }
 
-#[tauri::command]
-async fn launch_quilt_game(
-    app: tauri::AppHandle,
-    version_id: String,
-    loader_version: String,
-    instance_name: String,
-    username: String,
-    uuid: String,
-    offline: bool,
-    access_token: String,
-    concurrent_downloads: u32,
-    max_ram_mb: u32,
-) -> Result<(), String> {
-    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
-    launcher::run_quilt(
-        app, version_id, loader_version, instance_name, username, uuid, offline, access_token,
-        concurrent_downloads, max_ram_mb,
-    ).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn launch_forge_game(
-    app: tauri::AppHandle,
-    version_id: String,
-    forge_version: String,
-    instance_name: String,
-    username: String,
-    uuid: String,
-    offline: bool,
-    access_token: String,
-    concurrent_downloads: u32,
-    max_ram_mb: u32,
-) -> Result<(), String> {
-    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
-    launcher::run_forge(
-        app, version_id, forge_version, instance_name, username, uuid, offline, access_token,
-        concurrent_downloads, max_ram_mb,
-    ).await.map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-async fn launch_neoforge_game(
-    app: tauri::AppHandle,
-    version_id: String,
-    neoforge_version: String,
-    instance_name: String,
-    username: String,
-    uuid: String,
-    offline: bool,
-    access_token: String,
-    concurrent_downloads: u32,
-    max_ram_mb: u32,
-) -> Result<(), String> {
-    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
-    launcher::run_neoforge(
-        app, version_id, neoforge_version, instance_name, username, uuid, offline, access_token,
-        concurrent_downloads, max_ram_mb,
-    ).await.map_err(|e| e.to_string())
-}
-
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
@@ -1133,8 +1065,6 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             get_game_dir,
             launch_game,
-            launch_lb_game,
-            launch_fabric_game,
             get_lb_branches,
             get_lb_versions,
             microsoft_login,
@@ -1170,9 +1100,6 @@ pub fn run() {
             open_mods_folder,
             delete_instance_data,
             get_loader_versions,
-            launch_quilt_game,
-            launch_forge_game,
-            launch_neoforge_game,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
