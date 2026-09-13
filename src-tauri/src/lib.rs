@@ -1,4 +1,4 @@
-mod launcher;
+pub mod launcher;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -1103,4 +1103,76 @@ pub fn run() {
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
+}
+
+// ─── Unit tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn strip_type_prefix_handles_all_tag_shapes() {
+        assert_eq!(strip_type_prefix("v1.2.3"), "1.2.3");
+        assert_eq!(strip_type_prefix("1.2.3"), "1.2.3");
+        assert_eq!(strip_type_prefix("beta0.0.4"), "0.0.4");
+        assert_eq!(strip_type_prefix("vbeta0.0.4"), "0.0.4");
+        assert_eq!(strip_type_prefix("pre-release1.0.0"), "1.0.0");
+        assert_eq!(strip_type_prefix("release2.1.3"), "2.1.3");
+    }
+
+    #[test]
+    fn version_type_classifies_tags() {
+        assert_eq!(version_type("vbeta0.0.4"), "beta");
+        assert_eq!(version_type("beta1.0.0"), "beta");
+        assert_eq!(version_type("pre-release1.0.0"), "pre-release");
+        assert_eq!(version_type("vpre-release1.0.0"), "pre-release");
+        assert_eq!(version_type("v1.2.3"), "release");
+        assert_eq!(version_type("release1.0.0"), "release");
+    }
+
+    #[test]
+    fn parse_semver_orders_releases() {
+        assert_eq!(parse_semver("v1.2.3"), (1, 2, 3));
+        assert_eq!(parse_semver("beta0.0.4"), (0, 0, 4));
+        assert_eq!(parse_semver("21.1.172"), (21, 1, 172));
+        assert_eq!(parse_semver("1.20"), (1, 20, 0));
+        assert_eq!(parse_semver("garbage"), (0, 0, 0));
+        assert!(parse_semver("beta0.0.4") < parse_semver("0.0.5"));
+        assert_eq!(parse_semver("v0.0.4"), parse_semver("beta0.0.4"));
+    }
+
+    #[test]
+    fn is_unstable_ver_spots_prerelease_markers() {
+        for stable in ["0.15.11", "0.26.0", "1.20.1-47.3.11", "21.1.172", "52.0.12"] {
+            assert!(!is_unstable_ver(stable), "{stable} should count as stable");
+        }
+        for unstable in [
+            "0.16.0-beta.1",
+            "2.0.0-alpha.3",
+            "1.0.0-rc1",
+            "1.0.0-rc.2",
+            "1.0.0-pre1",
+            "1.21-snapshot-5",
+            "1.0.0-b.7",
+        ] {
+            assert!(is_unstable_ver(unstable), "{unstable} should count as unstable");
+        }
+    }
+
+    #[test]
+    fn tag_latest_marks_first_stable_only() {
+        let mk = |version: &str, stable: bool| LoaderVersionInfo {
+            version: version.to_string(),
+            stable,
+            latest: false,
+        };
+        let tagged = tag_latest(vec![mk("2.0-beta", false), mk("1.9", true), mk("1.8", true)]);
+        assert_eq!(tagged.iter().filter(|i| i.latest).count(), 1);
+        assert_eq!(tagged[1].version, "1.9");
+        assert!(!tagged[0].latest && !tagged[2].latest);
+        assert!(tag_latest(vec![]).is_empty());
+        let none_stable = tag_latest(vec![mk("2.0-beta", false)]);
+        assert!(!none_stable[0].latest);
+    }
 }

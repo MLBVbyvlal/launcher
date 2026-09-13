@@ -2285,3 +2285,39 @@ pub fn scan_java_installs() -> Vec<(u32, String)> {
     found.sort_by_key(|(v, _)| *v);
     found
 }
+
+// ─── Unit tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_java_major_reads_first_real_version() {
+        assert_eq!(folder_java_major("jre-8"), Some(8));
+        assert_eq!(folder_java_major("jre-21"), Some(21));
+        assert_eq!(folder_java_major("jdk-17.0.9"), Some(17));
+        assert_eq!(folder_java_major("temurin-8-jre"), Some(8));
+        // Old-style "1.8" numbering still resolves to Java 8.
+        assert_eq!(folder_java_major("jdk1.8.0_392"), Some(8));
+        assert_eq!(folder_java_major("17"), Some(17));
+        assert_eq!(folder_java_major("jdk-7"), None);
+        assert_eq!(folder_java_major("java"), None);
+        assert_eq!(folder_java_major(""), None);
+    }
+
+    #[test]
+    fn find_java_exe_recursive_searches_nested_dirs() {
+        let root = std::env::temp_dir().join(format!("mlbv-test-java-{}", std::process::id()));
+        let nested = root.join("jdk-21").join("bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        let exe = if cfg!(windows) { "javaw.exe" } else { "java" };
+        std::fs::write(nested.join(exe), b"fake").unwrap();
+
+        assert_eq!(find_java_exe_recursive(&root, exe), Some(nested.join(exe)));
+        assert_eq!(find_java_exe_recursive(&root.join("missing"), exe), None);
+
+        // Best-effort cleanup of the scratch dir; a leftover is harmless.
+        let _ = std::fs::remove_dir_all(&root);
+    }
+}
