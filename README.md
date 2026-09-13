@@ -16,11 +16,6 @@ MLBV is a custom Minecraft launcher for Windows: a Tauri 2 app with a Rust backe
 frontend. It handles what the official launcher does — accounts, versions, assets, libraries, Java —
 plus per-instance isolation, five mod loaders, and LiquidBounce as a first-class option.
 
-**Status: frozen beta.** The last release is **`beta0.0.4`**, dated 14 June 2026. There is no
-scheduled development; maintenance fixes (security, data integrity, broken updater) land on `main`
-between releases. See [Known limitations](#known-limitations) for a verified list of what does not
-work. Issues and pull requests may go unanswered.
-
 ---
 
 ## Contents
