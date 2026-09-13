@@ -57,27 +57,44 @@ fn vanilla_client_boots_headless() {
 }
 
 async fn proof_body() {
+    // Empty counts as unset: on push triggers the workflow has no inputs, so
+    // the env var reaches us as an empty string rather than missing.
+    let mc_version = std::env::var("MLBV_PROOF_MC_VERSION")
+        .ok()
+        .filter(|s| !s.trim().is_empty())
+        .unwrap_or_else(|| MC_VERSION.to_string());
     note(
         "proof-env",
         &format!(
-            "DISPLAY={:?} HOME={:?} version={}",
+            "DISPLAY={:?} HOME={:?} version={mc_version}",
             std::env::var("DISPLAY"),
             std::env::var("HOME"),
-            std::env::var("MLBV_PROOF_MC_VERSION").unwrap_or_else(|_| MC_VERSION.to_string())
         ),
     );
-    let mc_version =
-        std::env::var("MLBV_PROOF_MC_VERSION").unwrap_or_else(|_| MC_VERSION.to_string());
 
     note("proof-stage", "building Tauri app");
-    let app = match tauri::Builder::default()
-        .manage(GameState::new())
-        .build(tauri::generate_context!())
-    {
-        Ok(app) => app,
-        Err(e) => {
+    // Builder::build has panicked instead of returning Err under xvfb, and a
+    // panic message only reaches the (unreachable) raw log — so catch it and
+    // re-emit the payload as an annotation before failing.
+    let build_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+        tauri::Builder::default()
+            .manage(GameState::new())
+            .build(tauri::generate_context!())
+    }));
+    let app = match build_result {
+        Ok(Ok(app)) => app,
+        Ok(Err(e)) => {
             err_note("app-build-failed", &e.to_string());
             panic!("build Tauri app: {e}");
+        }
+        Err(payload) => {
+            let msg = payload
+                .downcast_ref::<String>()
+                .cloned()
+                .or_else(|| payload.downcast_ref::<&str>().map(|s| s.to_string()))
+                .unwrap_or_else(|| "<non-string panic payload>".to_string());
+            err_note("app-build-panicked", &msg);
+            panic!("Tauri Builder::build panicked: {msg}");
         }
     };
     let handle = app.handle().clone();
