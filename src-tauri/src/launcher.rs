@@ -84,7 +84,7 @@ enum Arg {
     Conditional { rules: Vec<ArgRule>, value: ArgValue },
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct ArgRule {
     action: String,
     #[serde(default)]
@@ -93,7 +93,7 @@ struct ArgRule {
     features: Option<HashMap<String, bool>>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 struct OsCondition {
     name: Option<String>,
     #[serde(default)]
@@ -394,6 +394,12 @@ pub struct LaunchRequest {
     pub access_token: String,
     pub concurrent_downloads: u32,
     pub max_ram_mb: u32,
+    /// Custom Java executable from Settings (empty = auto-detect).
+    pub java_path: String,
+    /// Extra JVM arguments from Settings, whitespace-separated (may be empty).
+    pub jvm_args: String,
+    /// `-Xms` value in MB (the old default was a hardcoded 256).
+    pub min_ram_mb: u32,
 }
 
 /// Shared context for the launch steps: paths, HTTP client and the
@@ -576,7 +582,7 @@ pub async fn launch(app: tauri::AppHandle, req: LaunchRequest) -> Result<()> {
 
     // ── 3. Vanilla libraries and natives ──
     let libs_dir = shared.join("libraries");
-    let mut classpath = download_vanilla_libraries(&ctx, &ver, &libs_dir, &natives_dir).await?;
+    let mut classpath = download_vanilla_libraries(&ctx, &ver, &libs_dir, &natives_dir, req.concurrent_downloads).await?;
 
     // ── 4. Assets ──
     download_assets(&ctx, &ver, req.concurrent_downloads).await?;
@@ -589,7 +595,8 @@ pub async fn launch(app: tauri::AppHandle, req: LaunchRequest) -> Result<()> {
 
     // ── 6. Java runtime ──
     progress(&app, "launch", PCT_JAVA, "Finding Java runtime…");
-    let java = ensure_java(&app, &client, &shared, ver.java_version.as_ref()).await
+    let java_override = if req.java_path.trim().is_empty() { None } else { Some(req.java_path.trim()) };
+    let java = ensure_java(&app, &client, &shared, ver.java_version.as_ref(), java_override).await
         .context("Failed to obtain Java runtime")?;
 
     // ── 7. Command line ──
@@ -630,7 +637,7 @@ pub async fn launch(app: tauri::AppHandle, req: LaunchRequest) -> Result<()> {
     };
 
     let cmd_args = build_launch_args(&ver, &plan, &main_class, &replace,
-        &natives_dir, &classpath_str, req.max_ram_mb);
+        &natives_dir, &classpath_str, req.max_ram_mb, req.min_ram_mb, &req.jvm_args);
 
     // ── 8. Spawn and track ──
     spawn_game(&app, &java, &cmd_args, &game_dir, &req.instance_name)?;
@@ -640,6 +647,85 @@ pub async fn launch(app: tauri::AppHandle, req: LaunchRequest) -> Result<()> {
 
 // ─── Shared download steps ───────────────────────────────────────────────────
 
+/// One library file to fetch into the shared cache.
+struct LibDlJob {
+    url: String,
+    path: PathBuf,
+    size: u64,
+    sha1: Option<String>,
+    /// Human-readable label for error context (`"library com.google.guava:guava:32.0"`).
+    label: String,
+}
+
+/// Download library files concurrently (the same semaphore pattern as the
+/// assets). Unlike a missing texture, a missing library breaks the game, so
+/// this is fail-fast where assets are best-effort: every job runs (populating
+/// the cache for a retry), then the first error aborts the launch. Callers
+/// build the classpath afterwards in manifest order — only fetching is
+/// parallel, so the command line is identical to the old sequential code.
+async fn download_libs_parallel(
+    ctx: &Ctx<'_>,
+    jobs: Vec<LibDlJob>,
+    stage: &str,
+    pct_start: f32,
+    pct_range: f32,
+    concurrent: u32,
+) -> Result<()> {
+    ctx.gate().await?;
+    let jobs: Vec<LibDlJob> = jobs.into_iter()
+        .filter(|j| !is_valid_file(&j.path, j.size))
+        .collect();
+    let total = jobs.len();
+    if total == 0 { return Ok(()); }
+    progress(ctx.app, "download", pct_start, &format!("{stage} (0/{total})…"));
+    let sem  = Arc::new(Semaphore::new(concurrent.max(1) as usize));
+    let done = Arc::new(AtomicUsize::new(0));
+    let mut set = tokio::task::JoinSet::<Result<(), String>>::new();
+    for job in jobs {
+        if ctx.cancelled() { break; }
+        let sem_c    = sem.clone();
+        let done_c   = done.clone();
+        let client_c = ctx.client.clone();
+        let app_c    = ctx.app.clone();
+        let cancel_c = ctx.cancel.clone();
+        let pause_c  = ctx.pause.clone();
+        let bytes_c  = ctx.bytes.clone();
+        let stage_c  = stage.to_string();
+        set.spawn(async move {
+            // The binding keeps the permit alive for the whole download —
+            // without it the limit would not apply (same as the assets).
+            let _permit = sem_c.acquire_owned().await.map_err(|e| e.to_string())?;
+            if cancel_c.load(Ordering::Relaxed) { return Ok(()); }
+            while pause_c.load(Ordering::Relaxed) {
+                if cancel_c.load(Ordering::Relaxed) { return Ok(()); }
+                tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
+            }
+            let r = download_file(&client_c, &job.url, &job.path, job.size,
+                    job.sha1.as_deref(), Some(&bytes_c)).await
+                .map_err(|e| format!("Downloading {}: {e:#}", job.label));
+            let n = done_c.fetch_add(1, Ordering::Relaxed) + 1;
+            if n % 8 == 0 || n == total {
+                let pct = pct_start + (n as f32 / total as f32) * pct_range;
+                progress(&app_c, "download", pct, &format!("{stage_c} ({n}/{total})…"));
+            }
+            r
+        });
+    }
+    let mut first_err: Option<String> = None;
+    while let Some(r) = set.join_next().await {
+        match r {
+            Ok(Ok(())) => {}
+            Ok(Err(e)) => { if first_err.is_none() { first_err = Some(e); } }
+            Err(e) => {
+                if first_err.is_none() { first_err = Some(format!("Download task failed: {e}")); }
+            }
+        }
+    }
+    if ctx.cancelled() { return Err(anyhow!("Download cancelled")); }
+    if let Some(e) = first_err { return Err(anyhow!("{e}")); }
+    Ok(())
+}
+
 /// Download the vanilla libraries into the shared cache and extract the
 /// platform natives into the instance. Returns the library classpath.
 async fn download_vanilla_libraries(
@@ -647,29 +733,26 @@ async fn download_vanilla_libraries(
     ver: &VersionJson,
     libs_dir: &PathBuf,
     natives_dir: &PathBuf,
+    concurrent: u32,
 ) -> Result<Vec<String>> {
-    let mut classpath: Vec<String> = Vec::new();
-    let total = ver.libraries.len();
-
-    for (i, lib) in ver.libraries.iter().enumerate() {
-        ctx.gate().await?;
+    // Plan first: every file to fetch, plus the ordered classpath entries.
+    let mut jobs: Vec<LibDlJob> = Vec::new();
+    let mut artifacts: Vec<PathBuf> = Vec::new();
+    let mut natives: Vec<PathBuf> = Vec::new();
+    for lib in &ver.libraries {
         if !lib_allowed(lib) { continue; }
-
-        if i % 8 == 0 {
-            let pct = PCT_LIBS + (i as f32 / total.max(1) as f32) * (PCT_LIBS_END - PCT_LIBS);
-            progress(ctx.app, "download", pct, &format!("Libraries ({i}/{total})…"));
-        }
-
         let Some(dl) = &lib.downloads else { continue };
 
         if let Some(art) = &dl.artifact {
             let path = libs_dir.join(&art.path);
-            if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
-            if !is_valid_file(&path, art.size) {
-                download_file(ctx.client, &art.url, &path, art.size, Some(&art.sha1), Some(&ctx.bytes)).await
-                    .with_context(|| format!("Downloading library {}", lib.name))?;
-            }
-            classpath.push(path.to_string_lossy().into_owned());
+            jobs.push(LibDlJob {
+                url: art.url.clone(),
+                path: path.clone(),
+                size: art.size,
+                sha1: Some(art.sha1.clone()),
+                label: format!("library {}", lib.name),
+            });
+            artifacts.push(path);
         }
 
         if let Some(natives_map) = &lib.natives {
@@ -677,16 +760,31 @@ async fn download_vanilla_libraries(
                 let classifier = classifier.replace("${arch}", arch_bits());
                 if let Some(nat) = dl.classifiers.as_ref().and_then(|c| c.get(&classifier)) {
                     let path = libs_dir.join(&nat.path);
-                    if let Some(parent) = path.parent() { fs::create_dir_all(parent)?; }
-                    if !is_valid_file(&path, nat.size) {
-                        download_file(ctx.client, &nat.url, &path, nat.size, Some(&nat.sha1), Some(&ctx.bytes)).await
-                            .with_context(|| format!("Downloading native {}", lib.name))?;
-                    }
-                    extract_natives(&path, natives_dir)
-                        .with_context(|| format!("Extracting natives {}", lib.name))?;
+                    jobs.push(LibDlJob {
+                        url: nat.url.clone(),
+                        path: path.clone(),
+                        size: nat.size,
+                        sha1: Some(nat.sha1.clone()),
+                        label: format!("native {}", lib.name),
+                    });
+                    natives.push(path);
                 }
             }
         }
+    }
+
+    download_libs_parallel(ctx, jobs, "Libraries",
+        PCT_LIBS, PCT_LIBS_END - PCT_LIBS, concurrent).await?;
+
+    // Classpath in manifest order, then the (fast, local) natives extraction.
+    let mut classpath: Vec<String> = Vec::with_capacity(artifacts.len());
+    for path in &artifacts {
+        classpath.push(path.to_string_lossy().into_owned());
+    }
+    for path in &natives {
+        ctx.gate().await?;
+        extract_natives(path, natives_dir)
+            .with_context(|| format!("Extracting natives {}", path.display()))?;
     }
     Ok(classpath)
 }
@@ -886,8 +984,17 @@ async fn run_loader_installer(
 ) -> Result<(serde_json::Value, String)> {
     let ver_dir   = ctx.shared.join("versions").join(&spec.ver_name);
     let json_path = ver_dir.join(format!("{}.json", spec.ver_name));
+    let libs_dir  = ctx.shared.join("libraries");
 
-    if !json_path.exists() {
+    // A cached overlay counts only when its libraries are complete — an
+    // interrupted install or deleted files must re-run the installer, not
+    // launch with a partial classpath.
+    let cache_complete = fs::read_to_string(&json_path)
+        .ok()
+        .and_then(|t| serde_json::from_str::<serde_json::Value>(&t).ok())
+        .is_some_and(|j| overlay_cache_complete(&j, &libs_dir));
+
+    if !cache_complete {
         let installer_dir = ctx.shared.join(spec.installer_dir);
         fs::create_dir_all(&installer_dir)?;
         let installer_path = installer_dir.join(&spec.installer_name);
@@ -902,7 +1009,9 @@ async fn run_loader_installer(
             component: "java-runtime-gamma".to_string(),
             major_version: spec.java_major,
         };
-        let java = ensure_java(ctx.app, ctx.client, &ctx.shared, Some(&java_req)).await
+        // The installer needs its own fixed major version, so the user's game
+        // Java override deliberately does not apply here (None).
+        let java = ensure_java(ctx.app, ctx.client, &ctx.shared, Some(&java_req), None).await
             .with_context(|| format!("Failed to find Java for {} installer", spec.kind))?;
 
         progress(ctx.app, "install", 30.0, &format!("Installing {} (this may take a minute)…", spec.kind));
@@ -998,7 +1107,7 @@ async fn prepare_loader_stage(
             };
 
             let profile = fetch_meta_profile(ctx, api_base, mc_ver, loader_ver, label).await?;
-            let classpath = download_profile_libraries(ctx, &profile, default_base, label).await?;
+            let classpath = download_profile_libraries(ctx, &profile, default_base, label, req.concurrent_downloads).await?;
             if extra_mods { download_fabric_api(ctx, mc_ver).await?; }
 
             Ok(LaunchPlan {
@@ -1017,7 +1126,7 @@ async fn prepare_loader_stage(
             let main_class = json["mainClass"].as_str()
                 .ok_or_else(|| anyhow!("No mainClass in {kind} version JSON"))?
                 .to_string();
-            let classpath = download_overlay_libraries(ctx, json, libs_dir, kind).await?;
+            let classpath = download_overlay_libraries(ctx, json, libs_dir, kind, ver_name, req.concurrent_downloads).await?;
             Ok(LaunchPlan {
                 version_name: ver_name.clone(),
                 main_class: Some(main_class),
@@ -1036,7 +1145,7 @@ async fn prepare_loader_stage(
             let loader_ver = &manifest.build.fabric_loader_version;
             let profile = fetch_meta_profile(ctx, "https://meta.fabricmc.net/v2",
                 mc_ver, loader_ver, "Fabric").await?;
-            let classpath = download_profile_libraries(ctx, &profile, None, "Fabric").await?;
+            let classpath = download_profile_libraries(ctx, &profile, None, "Fabric", req.concurrent_downloads).await?;
             download_lb_mods(ctx, manifest).await?;
             download_lb_extra_mods(ctx, mc_ver).await;
 
@@ -1076,18 +1185,13 @@ async fn download_profile_libraries(
     profile: &FabricProfile,
     default_base: Option<&str>,
     label: &str,
+    concurrent: u32,
 ) -> Result<Vec<String>> {
     let libs_dir = ctx.shared.join("libraries");
-    let mut out: Vec<String> = Vec::new();
-    let total = profile.libraries.len();
+    let mut jobs: Vec<LibDlJob> = Vec::new();
+    let mut ordered: Vec<PathBuf> = Vec::new();
 
-    for (i, flib) in profile.libraries.iter().enumerate() {
-        ctx.gate().await?;
-        if i % 5 == 0 {
-            let pct = PCT_LOADER + (i as f32 / total.max(1) as f32) * (PCT_LOADER_END - PCT_LOADER);
-            progress(ctx.app, "download", pct, &format!("{label} libraries ({i}/{total})…"));
-        }
-
+    for flib in &profile.libraries {
         // Maven coordinates: group:artifact:version
         let parts: Vec<&str> = flib.name.splitn(3, ':').collect();
         if parts.len() < 3 { continue; }
@@ -1096,74 +1200,151 @@ async fn download_profile_libraries(
             group = group.replace('.', "/"));
         let dest = libs_dir.join(&rel_path);
 
-        if !dest.exists() {
+        if !is_valid_file(&dest, 0) {
             // Quilt leaves `url` empty for its own artifacts.
             let base = if flib.url.is_empty() {
                 default_base.ok_or_else(|| anyhow!("{label} library {} has no download URL", flib.name))?
             } else {
                 flib.url.as_str()
             };
-            if let Some(parent) = dest.parent() { fs::create_dir_all(parent)?; }
             let url = format!("{}/{rel_path}", base.trim_end_matches('/'));
-            download_file(ctx.client, &url, &dest, 0, None, Some(&ctx.bytes)).await
-                .with_context(|| format!("Downloading {}", dest.display()))?;
+            jobs.push(LibDlJob {
+                url,
+                path: dest.clone(),
+                size: 0,
+                sha1: None,
+                label: format!("{label} library {}", flib.name),
+            });
         }
-        out.push(dest.to_string_lossy().into_owned());
+        ordered.push(dest);
     }
-    Ok(out)
+
+    let stage = format!("{label} libraries");
+    download_libs_parallel(ctx, jobs, &stage,
+        PCT_LOADER, PCT_LOADER_END - PCT_LOADER, concurrent).await?;
+
+    Ok(ordered.iter().map(|p| p.to_string_lossy().into_owned()).collect())
+}
+
+/// One Forge/NeoForge overlay library, classified by where its file comes
+/// from. A single classification point for the cache check and the download
+/// step, so the two can never disagree about what is required.
+enum OverlayLib {
+    /// Disallowed on this platform, or an entry without usable coordinates:
+    /// skip silently (the old behaviour for both cases).
+    Skip,
+    /// Explicit `downloads.artifact`: download it when absent.
+    Explicit { path: PathBuf, url: String, size: u64, sha1: Option<String> },
+    /// Plain Maven coordinates the installer must have placed in the cache.
+    Cached { path: PathBuf },
+}
+
+fn classify_overlay_lib(lib_val: &serde_json::Value, libs_dir: &PathBuf) -> OverlayLib {
+    let name = lib_val["name"].as_str().unwrap_or("");
+    if name.is_empty() { return OverlayLib::Skip; }
+    // Overlay rules use the same Mojang semantics as vanilla libraries.
+    if let Some(rules_val) = lib_val.get("rules") {
+        if let Ok(rules) = serde_json::from_value::<Vec<ArgRule>>(rules_val.clone()) {
+            if !rules_allow(&rules) { return OverlayLib::Skip; }
+        }
+    }
+    // Explicit download entry wins when the JSON has one.
+    if let (Some(path), Some(url)) = (
+        lib_val["downloads"]["artifact"]["path"].as_str(),
+        lib_val["downloads"]["artifact"]["url"].as_str(),
+    ) {
+        if !path.is_empty() && !url.is_empty() {
+            return OverlayLib::Explicit {
+                path: libs_dir.join(path),
+                url: url.to_string(),
+                size: lib_val["downloads"]["artifact"]["size"].as_u64().unwrap_or(0),
+                sha1: lib_val["downloads"]["artifact"]["sha1"].as_str().map(|s| s.to_string()),
+            };
+        }
+    }
+    // Otherwise the installer put it in the cache: resolve Maven coords.
+    let parts: Vec<&str> = name.splitn(3, ':').collect();
+    if parts.len() >= 3 {
+        let jar_name = format!("{}-{}.jar", parts[1], parts[2]);
+        let p = libs_dir.join(parts[0].replace('.', "/"))
+            .join(parts[1]).join(parts[2]).join(&jar_name);
+        OverlayLib::Cached { path: p }
+    } else {
+        OverlayLib::Skip
+    }
+}
+
+/// True when every overlay library the launch needs is already in the cache.
+/// A cached Forge/NeoForge install that fails this check is re-installed
+/// instead of trusted: launching with a partial classpath crashes the game
+/// with a confusing error.
+fn overlay_cache_complete(json: &serde_json::Value, libs_dir: &PathBuf) -> bool {
+    let Some(libs) = json["libraries"].as_array() else { return true };
+    libs.iter().all(|lib| match classify_overlay_lib(lib, libs_dir) {
+        OverlayLib::Skip => true,
+        OverlayLib::Explicit { path, .. } | OverlayLib::Cached { path } => path.exists(),
+    })
 }
 
 /// Collect (and where needed download) the libraries of a Forge/NeoForge
-/// overlay JSON. The installer has usually placed them already.
+/// overlay JSON. The installer has usually placed them already; anything
+/// still missing afterwards is a loud error, never a silent hole in the
+/// classpath.
 async fn download_overlay_libraries(
     ctx: &Ctx<'_>,
     json: &serde_json::Value,
     libs_dir: &PathBuf,
     kind: &str,
+    ver_name: &str,
+    concurrent: u32,
 ) -> Result<Vec<String>> {
-    let mut out: Vec<String> = Vec::new();
-    let Some(libs) = json["libraries"].as_array() else { return Ok(out) };
-    let total = libs.len();
+    let Some(libs) = json["libraries"].as_array() else { return Ok(Vec::new()) };
+    let mut jobs: Vec<LibDlJob> = Vec::new();
+    let mut ordered: Vec<PathBuf> = Vec::new();
 
-    for (i, lib_val) in libs.iter().enumerate() {
-        ctx.gate().await?;
-        if i % 5 == 0 {
-            let pct = PCT_LOADER + (i as f32 / total.max(1) as f32) * (PCT_LOADER_END - PCT_LOADER);
-            progress(ctx.app, "download", pct, &format!("{kind} libraries ({i}/{total})…"));
-        }
-
-        let name = lib_val["name"].as_str().unwrap_or("");
-        if name.is_empty() { continue; }
-
-        // Explicit download entry wins when the JSON has one.
-        if let (Some(path), Some(url)) = (
-            lib_val["downloads"]["artifact"]["path"].as_str(),
-            lib_val["downloads"]["artifact"]["url"].as_str(),
-        ) {
-            if !url.is_empty() {
-                let p = libs_dir.join(path);
-                if !p.exists() {
-                    if let Some(parent) = p.parent() { fs::create_dir_all(parent)?; }
-                    let size = lib_val["downloads"]["artifact"]["size"].as_u64().unwrap_or(0);
-                    let sha1 = lib_val["downloads"]["artifact"]["sha1"].as_str();
-                    download_file(ctx.client, url, &p, size, sha1, Some(&ctx.bytes)).await
-                        .with_context(|| format!("Downloading {kind} library {path}"))?;
+    for lib_val in libs {
+        match classify_overlay_lib(lib_val, libs_dir) {
+            OverlayLib::Skip => {}
+            OverlayLib::Explicit { path, url, size, sha1 } => {
+                if !is_valid_file(&path, size) {
+                    jobs.push(LibDlJob {
+                        url,
+                        path: path.clone(),
+                        size,
+                        sha1,
+                        label: format!("{kind} library {}",
+                            lib_val["name"].as_str().unwrap_or("?")),
+                    });
                 }
-                if p.exists() { out.push(p.to_string_lossy().into_owned()); }
-                continue;
+                ordered.push(path);
+            }
+            OverlayLib::Cached { path } => {
+                ordered.push(path);
             }
         }
-
-        // Otherwise the installer put it in the cache: resolve Maven coords.
-        let parts: Vec<&str> = name.splitn(3, ':').collect();
-        if parts.len() >= 3 {
-            let jar_name = format!("{}-{}.jar", parts[1], parts[2]);
-            let p = libs_dir.join(parts[0].replace('.', "/"))
-                .join(parts[1]).join(parts[2]).join(&jar_name);
-            if p.exists() { out.push(p.to_string_lossy().into_owned()); }
-        }
     }
-    Ok(out)
+
+    let stage = format!("{kind} libraries");
+    download_libs_parallel(ctx, jobs, &stage,
+        PCT_LOADER, PCT_LOADER_END - PCT_LOADER, concurrent).await?;
+
+    // Backstop: after a (re-)install every required file must be present.
+    // Reaching this means the installer itself failed to provide a library.
+    let missing: Vec<String> = ordered.iter()
+        .filter(|p| !p.exists())
+        .filter_map(|p| p.file_name().map(|n| n.to_string_lossy().into_owned()))
+        .collect();
+    if !missing.is_empty() {
+        let shown = missing.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+        let more = if missing.len() > 5 { format!(" (+{} more)", missing.len() - 5) } else { String::new() };
+        return Err(anyhow!(
+            "{kind} install is incomplete, {n} libraries missing ({shown}{more}). \
+             Delete shared/versions/{ver_name} and launch again to re-run the installer.",
+            n = missing.len(),
+        ));
+    }
+
+    Ok(ordered.iter().map(|p| p.to_string_lossy().into_owned()).collect())
 }
 
 /// Try to download one Modrinth mod by slug. Silently skips when the project
@@ -1384,6 +1565,8 @@ fn build_launch_args(
     natives_dir: &Path,
     classpath_str: &str,
     max_ram_mb: u32,
+    min_ram_mb: u32,
+    jvm_args: &str,
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
@@ -1399,8 +1582,17 @@ fn build_launch_args(
         args.push("-cp".to_string());
         args.push(classpath_str.to_string());
     }
-    args.push(format!("-Xmx{max_ram_mb}m"));
-    args.push("-Xms256m".to_string());
+    // Clamp insanity: the JVM refuses to start with -Xmx0m, and a minimum
+    // above the maximum is equally fatal.
+    let max_ram = max_ram_mb.max(512);
+    let min_ram = min_ram_mb.clamp(256, max_ram);
+    args.push(format!("-Xmx{max_ram}m"));
+    args.push(format!("-Xms{min_ram}m"));
+    // User JVM args go after the launcher defaults so they win on conflict
+    // (a custom -Xmx in Settings → Java overrides the slider, by design).
+    for part in jvm_args.split_whitespace() {
+        args.push(part.to_string());
+    }
     args.push(main_class.to_string());
 
     if let Some(new_args) = &ver.arguments {
@@ -1753,7 +1945,8 @@ async fn download_file(
 
     if let Some(p) = path.parent() { fs::create_dir_all(p)?; }
     let part_path = path.with_extension("part");
-    let mut file = fs::File::create(&part_path)?;
+    // Buffered: HTTP chunks are small and one syscall per chunk is slow.
+    let mut file = std::io::BufWriter::new(fs::File::create(&part_path)?);
     let mut hasher = sha1::Sha1::new();
     let mut downloaded: u64 = 0;
     let mut resp = resp;
@@ -1765,6 +1958,9 @@ async fn download_file(
             counter.fetch_add(chunk.len() as u64, Ordering::Relaxed);
         }
     }
+    // Explicit flush: BufWriter's drop ignores write errors, and a short
+    // file must fail the size check below, not pass it.
+    file.flush()?;
     drop(file);
 
     if expected_size > 0 && downloaded != expected_size {
@@ -1856,10 +2052,13 @@ fn os_condition_matches(os: &OsCondition) -> bool {
     name_ok && arch_ok
 }
 
-fn lib_allowed(lib: &Library) -> bool {
-    if lib.rules.is_empty() { return true; }
+/// Mojang rule semantics shared by vanilla libraries, launch arguments and
+/// Forge/NeoForge overlay libraries: no rules means allowed, otherwise the
+/// last matching rule wins.
+fn rules_allow(rules: &[ArgRule]) -> bool {
+    if rules.is_empty() { return true; }
     let mut allowed = false;
-    for rule in &lib.rules {
+    for rule in rules {
         let os_match = match &rule.os {
             None => true,
             Some(os) => os_condition_matches(os),
@@ -1869,22 +2068,17 @@ fn lib_allowed(lib: &Library) -> bool {
     allowed
 }
 
+fn lib_allowed(lib: &Library) -> bool {
+    rules_allow(&lib.rules)
+}
+
 fn resolve_arg(arg: &Arg, replace: &impl Fn(&str) -> String, out: &mut Vec<String>) {
     match arg {
         Arg::Plain(s) => out.push(replace(s)),
         Arg::Conditional { rules, value } => {
             // Skip args that require specific features (demo, custom resolution)
             if rules.iter().any(|r| r.features.is_some()) { return; }
-
-            let mut allowed = false;
-            for rule in rules {
-                let os_match = match &rule.os {
-                    None => true,
-                    Some(os) => os_condition_matches(os),
-                };
-                if os_match { allowed = rule.action == "allow"; }
-            }
-            if !allowed { return; }
+            if !rules_allow(rules) { return; }
 
             match value {
                 ArgValue::One(s) => out.push(replace(s)),
@@ -2059,7 +2253,20 @@ pub async fn ensure_java(
     client: &reqwest::Client,
     shared_dir: &PathBuf,
     req: Option<&JavaVersionReq>,
+    java_override: Option<&str>,
 ) -> Result<PathBuf> {
+    // Explicit user override (Settings → Java) wins over auto-detection.
+    // A dangling path falls back to auto-detect instead of breaking the
+    // launch — the user may have uninstalled that JDK.
+    if let Some(custom) = java_override.map(str::trim).filter(|s| !s.is_empty()) {
+        let p = PathBuf::from(custom);
+        if p.is_file() {
+            progress(app, "launch", 88.0, &format!("Java: using custom executable {}", p.display()));
+            return Ok(p);
+        }
+        progress(app, "launch", 88.0, &format!("Java: custom path not found ({custom}), falling back to auto-detect…"));
+    }
+
     let major = req.map(|r| r.major_version).unwrap_or(21);
     let exe   = if cfg!(windows) { "javaw.exe" } else { "java" };
 
@@ -2130,7 +2337,7 @@ pub async fn ensure_java(
     let dl_bytes = app.state::<GameState>().dl_bytes.clone();
     {
         use std::io::Write;
-        let mut file = fs::File::create(&zip_path)?;
+        let mut file = std::io::BufWriter::new(fs::File::create(&zip_path)?);
         let mut downloaded: u64 = 0;
         let mut last_mb: u64 = 0;
         let mut resp = resp;
@@ -2150,6 +2357,7 @@ pub async fn ensure_java(
                 }
             }
         }
+        file.flush()?;
     }
 
     progress(app, "download", 93.5, &format!("Installing Java {major}…"));
@@ -2245,7 +2453,7 @@ pub async fn download_java_major(app: &tauri::AppHandle, major: u32) -> Result<(
     let zip_path = java_dir.join("jre.zip");
     {
         use std::io::Write;
-        let mut file = fs::File::create(&zip_path)?;
+        let mut file = std::io::BufWriter::new(fs::File::create(&zip_path)?);
         let mut downloaded: u64 = 0;
         let mut last_mb: u64 = 0;
         let mut resp = resp;
@@ -2264,6 +2472,7 @@ pub async fn download_java_major(app: &tauri::AppHandle, major: u32) -> Result<(
                 emit("downloading", pct, &format!("Java {major}: {mb}{tot_s} MB"));
             }
         }
+        file.flush()?;
     }
 
     emit("installing", 92.0, &format!("Installing Java {major}…"));
@@ -2393,5 +2602,95 @@ mod tests {
         for evil in ["../evil.dll", "a/../../evil.dll", "/abs/evil.dll"] {
             assert_eq!(zip_entry_path(&dest, evil), None, "{evil:?} must not escape");
         }
+    }
+
+    #[test]
+    fn rules_allow_matches_mojang_semantics() {
+        let allow = ArgRule { action: "allow".to_string(), os: None, features: None };
+        let deny = ArgRule { action: "disallow".to_string(), os: None, features: None };
+        let alien = ArgRule {
+            action: "allow".to_string(),
+            os: Some(OsCondition { name: Some("solaris-never".to_string()), arch: None }),
+            features: None,
+        };
+        assert!(rules_allow(&[]));
+        assert!(rules_allow(std::slice::from_ref(&allow)));
+        assert!(!rules_allow(std::slice::from_ref(&deny)));
+        // Last matching rule wins.
+        assert!(rules_allow(&[deny.clone(), allow.clone()]));
+        assert!(!rules_allow(&[allow.clone(), deny.clone()]));
+        // A rule for another OS never matches, on any platform.
+        assert!(!rules_allow(std::slice::from_ref(&alien)));
+        // ...and does not shadow a matching rule either way.
+        assert!(rules_allow(&[alien.clone(), allow.clone()]));
+    }
+
+    #[test]
+    fn overlay_lib_classification_splits_explicit_cached_and_skipped() {
+        let libs = PathBuf::from("/cache/libraries");
+        let explicit = serde_json::json!({
+            "name": "net.minecraftforge:forge:1.20.1-47.3.11:client",
+            "downloads": { "artifact": {
+                "path": "net/minecraftforge/forge/1.20.1-47.3.11/forge-1.20.1-47.3.11-client.jar",
+                "url": "https://maven.minecraftforge.net/x.jar",
+                "size": 123, "sha1": "abc",
+            }},
+        });
+        match classify_overlay_lib(&explicit, &libs) {
+            OverlayLib::Explicit { path, url, size, sha1 } => {
+                assert_eq!(path, libs.join("net/minecraftforge/forge/1.20.1-47.3.11/forge-1.20.1-47.3.11-client.jar"));
+                assert_eq!(url, "https://maven.minecraftforge.net/x.jar");
+                assert_eq!(size, 123);
+                assert_eq!(sha1.as_deref(), Some("abc"));
+            }
+            _ => panic!("explicit entry must classify as Explicit"),
+        }
+        let cached = serde_json::json!({ "name": "org.ow2.asm:asm:9.6" });
+        match classify_overlay_lib(&cached, &libs) {
+            OverlayLib::Cached { path } => {
+                assert_eq!(path, libs.join("org/ow2/asm/asm/9.6/asm-9.6.jar"));
+            }
+            _ => panic!("coords entry must classify as Cached"),
+        }
+        // Disallowed on this platform → skipped.
+        let denied = serde_json::json!({
+            "name": "org.ow2.asm:asm:9.6",
+            "rules": [{ "action": "disallow" }],
+        });
+        assert!(matches!(classify_overlay_lib(&denied, &libs), OverlayLib::Skip));
+        // Allowed explicitly → kept.
+        let allowed = serde_json::json!({
+            "name": "org.ow2.asm:asm:9.6",
+            "rules": [{ "action": "allow" }],
+        });
+        assert!(matches!(classify_overlay_lib(&allowed, &libs), OverlayLib::Cached { .. }));
+        // No usable coordinates → skipped (the old silent-skip case).
+        assert!(matches!(
+            classify_overlay_lib(&serde_json::json!({ "name": "" }), &libs),
+            OverlayLib::Skip
+        ));
+        assert!(matches!(
+            classify_overlay_lib(&serde_json::json!({ "name": "not-coords" }), &libs),
+            OverlayLib::Skip
+        ));
+    }
+
+    #[test]
+    fn overlay_cache_complete_detects_missing_files() {
+        let root = std::env::temp_dir().join(format!("mlbv-test-overlay-{}", std::process::id()));
+        let libs = root.join("libraries");
+        let json = serde_json::json!({
+            "libraries": [
+                { "name": "org.ow2.asm:asm:9.6" },
+                // Disallowed entries never count as missing.
+                { "name": "org.ow2.asm:asm:9.6", "rules": [{ "action": "disallow" }] },
+            ],
+        });
+        assert!(!overlay_cache_complete(&json, &libs));
+        let p = libs.join("org/ow2/asm/asm/9.6/asm-9.6.jar");
+        std::fs::create_dir_all(p.parent().unwrap()).unwrap();
+        std::fs::write(&p, b"x").unwrap();
+        assert!(overlay_cache_complete(&json, &libs));
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

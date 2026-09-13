@@ -345,6 +345,9 @@ async fn launch_game(
     access_token: String,
     concurrent_downloads: u32,
     max_ram_mb: u32,
+    java_path: String,
+    jvm_args: String,
+    min_ram_mb: u32,
 ) -> Result<(), String> {
     launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     launcher::launch(app, launcher::LaunchRequest {
@@ -359,6 +362,9 @@ async fn launch_game(
         access_token,
         concurrent_downloads,
         max_ram_mb,
+        java_path,
+        jvm_args,
+        min_ram_mb,
     })
     .await
     .map_err(|e| format!("{e:#}"))
@@ -1037,6 +1043,22 @@ fn tag_latest(mut items: Vec<LoaderVersionInfo>) -> Vec<LoaderVersionInfo> {
     items
 }
 
+/// Every `<version>x</version>` from a maven-metadata.xml, whether the file
+/// is pretty-printed (one version per line) or minified (all on one line).
+/// Token-based on purpose: a line-based parser silently returns nothing for
+/// the minified shape.
+fn parse_maven_versions(xml: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut rest = xml;
+    while let Some(start) = rest.find("<version>") {
+        rest = &rest[start + "<version>".len()..];
+        let Some(end) = rest.find("</version>") else { break };
+        out.push(rest[..end].trim().to_string());
+        rest = &rest[end + "</version>".len()..];
+    }
+    out
+}
+
 #[tauri::command]
 async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<LoaderVersionInfo>, String> {
     let client = reqwest::Client::builder()
@@ -1082,13 +1104,7 @@ async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<Loade
                 .send().await.map_err(|e| e.to_string())?
                 .text().await.map_err(|e| e.to_string())?;
             let prefix = format!("{}-", mc_ver);
-            let items: Vec<LoaderVersionInfo> = xml.lines()
-                .filter_map(|l| {
-                    let l = l.trim();
-                    if l.starts_with("<version>") && l.ends_with("</version>") {
-                        Some(l[9..l.len()-10].to_string())
-                    } else { None }
-                })
+            let items: Vec<LoaderVersionInfo> = parse_maven_versions(&xml).into_iter()
                 .filter(|v| v.starts_with(&prefix))
                 .map(|version| {
                     let stable = !is_unstable_ver(&version);
@@ -1108,13 +1124,7 @@ async fn get_loader_versions(mc_ver: String, loader: String) -> Result<Vec<Loade
                 [_, b] => format!("{}.", b),
                 _ => return Err(format!("Invalid MC version: {mc_ver}")),
             };
-            let items: Vec<LoaderVersionInfo> = xml.lines()
-                .filter_map(|l| {
-                    let l = l.trim();
-                    if l.starts_with("<version>") && l.ends_with("</version>") {
-                        Some(l[9..l.len()-10].to_string())
-                    } else { None }
-                })
+            let items: Vec<LoaderVersionInfo> = parse_maven_versions(&xml).into_iter()
                 .filter(|v| v.starts_with(&prefix))
                 .map(|version| {
                     let stable = !is_unstable_ver(&version);
@@ -1305,5 +1315,19 @@ mod tests {
         ] {
             assert_eq!(installer_ext_from_url(bad), None, "{bad:?} must be rejected");
         }
+    }
+
+    #[test]
+    fn parse_maven_versions_handles_pretty_and_minified_xml() {
+        let pretty = "<metadata>\n  <versions>\n    <version>1.20.1-47.0.1</version>\n    <version>1.20.1-47.3.11</version>\n  </versions>\n</metadata>";
+        assert_eq!(
+            parse_maven_versions(pretty),
+            vec!["1.20.1-47.0.1", "1.20.1-47.3.11"]
+        );
+        let minified = "<metadata><versions><version>21.1.172</version><version>21.1.175</version></versions></metadata>";
+        assert_eq!(parse_maven_versions(minified), vec!["21.1.172", "21.1.175"]);
+        assert!(parse_maven_versions("no versions here").is_empty());
+        assert!(parse_maven_versions("").is_empty());
+        assert!(parse_maven_versions("<version>unterminated").is_empty());
     }
 }
