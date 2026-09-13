@@ -12,7 +12,8 @@ explicitly in your report, and state what you skipped and why.
 ## 1. What this repository is
 
 MLBV is a Minecraft launcher: **Tauri 2** (Rust backend) + **React 19 / TypeScript** frontend,
-packaged for Windows. It implements the Minecraft launcher protocol directly — version manifest,
+packaged for Windows and Linux (the self-updater is Windows-only). It implements the Minecraft
+launcher protocol directly — version manifest,
 version JSON, asset index, libraries, natives, classpath, JVM arguments — plus five mod loaders
 (Fabric, Quilt, Forge, NeoForge, vanilla), LiquidBounce, Java provisioning, a configs catalog and a
 self-update check.

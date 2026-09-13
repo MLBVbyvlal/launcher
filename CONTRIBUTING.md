@@ -28,7 +28,8 @@ instead of guessing; and never commit a secret or personal data (see *Secrets an
 | Rust | stable (edition 2021) | `rustup` is the usual way |
 | Tauri prerequisites | per OS | Windows: WebView2 + VS C++ Build Tools · Linux: `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libxdo-dev`, `libssl-dev`, `build-essential`, `pkg-config` · macOS: Xcode CLT |
 
-The launcher targets Windows. Linux and macOS compile, but installers and the self-updater are
+The launcher targets Windows and Linux: CI builds NSIS/MSI installers and `.deb`/`.AppImage`
+packages. macOS compiles, but no packages are published for it. The in-app self-updater is
 Windows-only (NSIS).
 
 ## Setup
@@ -59,9 +60,9 @@ next to the code in `#[cfg(test)]` modules, black-box integration tests live in 
 If you add testable logic (parsing, version comparison, path building, argument resolution), cover
 it the same way. There is **no linter**.
 
-CI (`.github/workflows/ci.yml`) runs three jobs on every push: type-check + bundle, `cargo check`
-plus `cargo test` on Linux, and a full Windows installer build. Run the same steps locally before
-opening a PR.
+CI (`.github/workflows/ci.yml`) runs four jobs on every push: type-check + bundle, `cargo check`
+plus `cargo test` on Linux, a full Windows installer build, and Linux packages. Run the same steps
+locally before opening a PR.
 
 ## Project layout
 
@@ -138,7 +139,8 @@ Do not bump the version, create a tag, or publish a release unless the maintaine
 
 1. Bump the version everywhere (table above) and update the changelog text in the release body.
 2. `npm run tauri build -- --bundles nsis,msi`, or let CI produce the installers as artifacts.
-3. Create a GitHub release with a tag (`v0.0.x` or `beta0.0.x`) and attach the `.exe` and `.msi`.
+3. Create a GitHub release with a tag (`v0.0.x` or `beta0.0.x`) and attach the installers
+   (`.exe`, `.msi`, `.deb`, `.AppImage`).
 4. The in-app updater looks for the first asset whose name ends in `.exe` and runs it with
    `/S /D=<install dir>`, so **the NSIS `.exe` must be attached**; the MSI is for manual installs.
    Note that the current update check also requires the release to satisfy the pre-release filter —
