@@ -89,6 +89,10 @@ work. Issues and pull requests may go unanswered.
   and one-click install into a chosen instance.
 
 ### Everything else
+- One-time 0.0.5 migration for updaters: pins rolling “Latest” instances to their
+  installed versions and deletes the stale shared-natives folders (≤0.0.4 mixed
+  every loader's natives into one folder, which broke launches). Saves, mods,
+  configs, libraries, assets and Java are kept — nothing is re-downloaded.
 - First-run setup wizard: language → preferences → account → Java provisioning.
 - **Console tab** in the main window streaming live game output, with a per-instance
   selector when several games run at once.
@@ -98,7 +102,7 @@ work. Issues and pull requests may go unanswered.
   enable/disable, update checks with update-all, and one-click mod-list export.
 - Accent colour theming (8 presets + custom hex), collapsible sidebar, swipe between the Minecraft
   and LiquidBounce tabs, hide-launcher-on-launch.
-- English and Russian UI (297 keys per language).
+- English and Russian UI (323 keys per language).
 
 ---
 
