@@ -209,6 +209,11 @@ const S: Record<Lang, Record<string, string>> = {
     'update.downloading': 'Downloading update…',
     'update.installing': 'Installing…',
     'update.done': 'Updated to',
+    'update.choose_format': 'Choose installer:',
+    'update.format_exe': '.exe installer',
+    'update.format_exe_desc': 'Recommended — fast silent update.',
+    'update.format_msi': '.msi package',
+    'update.format_msi_desc': 'Installs through the Windows Installer service with a setup wizard.',
 
     // Add account modal
     'acct.title': 'Add Account',
@@ -553,6 +558,11 @@ const S: Record<Lang, Record<string, string>> = {
     'update.downloading': 'Загрузка обновления…',
     'update.installing': 'Установка…',
     'update.done': 'Обновлено до',
+    'update.choose_format': 'Выберите установщик:',
+    'update.format_exe': '.exe установщик',
+    'update.format_exe_desc': 'Рекомендуется — быстрое тихое обновление.',
+    'update.format_msi': '.msi пакет',
+    'update.format_msi_desc': 'Установка через системный установщик Windows с мастером настройки.',
 
     // Add account modal
     'acct.title': 'Добавить аккаунт',

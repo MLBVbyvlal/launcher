@@ -28,9 +28,9 @@ instead of guessing; and never commit a secret or personal data (see *Secrets an
 | Rust | stable (edition 2021) | `rustup` is the usual way |
 | Tauri prerequisites | per OS | Windows: WebView2 + VS C++ Build Tools · Linux: `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libxdo-dev`, `libssl-dev`, `build-essential`, `pkg-config` · macOS: Xcode CLT |
 
-The launcher targets Windows and Linux: CI builds NSIS/MSI installers and `.deb`/`.AppImage`
-packages. macOS compiles, but no packages are published for it. The in-app self-updater is
-Windows-only (NSIS).
+The launcher targets Windows and Linux: CI builds NSIS/MSI installers and `.deb`/`.rpm`/`.AppImage`
+packages (plus a Flatpak bundle on release tags). macOS compiles, but no packages are published
+for it. The in-app self-updater is Windows-only (NSIS/MSI).
 
 ## Setup
 
@@ -137,16 +137,15 @@ Do not bump the version, create a tag, or publish a release unless the maintaine
 
 ## Release process (maintainer)
 
-1. Bump the version everywhere (table above) and update the changelog text in the release body.
-2. `npm run tauri build -- --bundles nsis,msi`, or let CI produce the installers as artifacts.
-3. Create a GitHub release with a tag (`v0.0.x` or `beta0.0.x`) and attach the installers
-   (`.exe`, `.msi`, `.deb`, `.AppImage`).
-4. The in-app updater looks for the first asset whose name ends in `.exe` and runs it with
-   `/S /D=<install dir>`, so **the NSIS `.exe` must be attached**; the MSI is for manual installs.
-   Note that the current update check also requires the release to satisfy the pre-release filter —
-   see landmine 9 in `AGENTS.md` before expecting the updater to fire.
-5. Releases have been published as pre-releases so far. Keep the convention consistent, and if you
-   change it, update `check_for_update`'s expectations and `README.md` together.
+1. Bump the version everywhere (table above).
+2. Push a tag (`v0.0.x`, `beta0.0.x`, `release0.0.x` or `pre-release0.0.x`). The Release workflow
+   builds every installer — NSIS `.exe` + WiX `.msi`, `.deb` + `.rpm` + `.AppImage`, Flatpak bundle —
+   smoke-runs the Flatpak, and attaches everything to the tag's GitHub release. Tags starting with
+   `beta`/`pre-release` publish as pre-releases, the rest as full releases.
+3. To test without publishing: Actions → Release → Run workflow with `dry_run` on — the binaries
+   land in the run's artifacts instead of a release.
+4. The in-app updater reads that release and offers the `.exe` (silent `/S /D=` update,
+   recommended) or the `.msi` (guided install); pre-release candidates are shown with a warning.
 
 ## Secrets and personal data
 

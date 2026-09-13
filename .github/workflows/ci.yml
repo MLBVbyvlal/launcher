@@ -137,7 +137,7 @@ jobs:
             src-tauri/target/release/bundle/msi/*.msi
           if-no-files-found: error
 
-  # ── 4. Linux packages (.deb + AppImage) ─────────────────────────────────────
+  # ── 4. Linux packages (.deb + .rpm + AppImage) ───────────────────────────────
   build-linux:
     name: Full build (Linux packages)
     runs-on: ubuntu-latest
@@ -176,12 +176,13 @@ jobs:
         run: npm ci
 
       - name: Build packages
-        run: npm run tauri build -- --bundles deb,appimage
+        run: npm run tauri build -- --bundles deb,rpm,appimage
 
       - name: List build output
         shell: bash
         run: |
           ls -la src-tauri/target/release/bundle/deb/ || true
+          ls -la src-tauri/target/release/bundle/rpm/ || true
           ls -la src-tauri/target/release/bundle/appimage/ || true
 
       - name: Upload packages
@@ -190,5 +191,6 @@ jobs:
           name: mlbv-linux-packages
           path: |
             src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
             src-tauri/target/release/bundle/appimage/*.AppImage
           if-no-files-found: error

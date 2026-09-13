@@ -459,6 +459,7 @@ struct ReleaseInfo {
     body:     String,
     html_url: String,
     asset_url: String,
+    msi_url:  String,
     unstable_warning: bool,
 }
 
@@ -485,8 +486,9 @@ fn parse_semver(v: &str) -> (u64, u64, u64) {
 
 #[tauri::command]
 async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
-    // The updater ships an NSIS .exe and runs it with /S /D= — Windows-only
-    // by design. The frontend skips the check elsewhere; this is the backstop.
+    // The updater ships an NSIS .exe (silent) or a WiX .msi (setup wizard) —
+    // Windows-only by design. The frontend skips the check elsewhere; this is
+    // the backstop.
     if !cfg!(windows) {
         return Err("Self-update is only supported on Windows.".to_string());
     }
@@ -523,14 +525,26 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
 
     let tag = release["tag_name"].as_str().unwrap_or("").to_string();
     let ver = tag.trim_start_matches('v');
-    let asset_url = release["assets"]
-        .as_array()
-        .and_then(|a| a.iter().find(|asset| {
-            asset["name"].as_str().map(|n| n.ends_with(".exe")).unwrap_or(false)
-        }))
-        .and_then(|a| a["browser_download_url"].as_str())
-        .unwrap_or("")
-        .to_string();
+    let find_asset = |ext: &str| {
+        release["assets"]
+            .as_array()
+            .and_then(|a| {
+                a.iter().find(|asset| {
+                    asset["name"]
+                        .as_str()
+                        .map(|n| n.ends_with(ext))
+                        .unwrap_or(false)
+                })
+            })
+            .and_then(|a| a["browser_download_url"].as_str())
+            .unwrap_or("")
+            .to_string()
+    };
+    // NSIS .exe = silent one-click update (recommended); WiX .msi = guided
+    // install through the Windows Installer service. Either may be absent on
+    // old hand-assembled releases — the frontend only offers what exists.
+    let asset_url = find_asset(".exe");
+    let msi_url = find_asset(".msi");
 
     let unstable_warning = release["prerelease"].as_bool().unwrap_or(false) || version_type(ver) != "release";
 
@@ -540,6 +554,7 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
         body:     release["body"].as_str().unwrap_or("").to_string(),
         html_url: release["html_url"].as_str().unwrap_or("").to_string(),
         asset_url,
+        msi_url,
         unstable_warning,
     }))
 }
@@ -562,6 +577,24 @@ fn update_host_allowed(url: &str) -> bool {
     TRUSTED_HOSTS.contains(&host.as_str())
 }
 
+/// Installer kind of an update URL — `exe` (NSIS) or `msi` (WiX) — taken
+/// from the file name at the end of the URL. Anything else is rejected, so
+/// `download_update` and `apply_update` can never disagree about the file.
+fn installer_ext_from_url(url: &str) -> Option<&str> {
+    let file_name = url.rsplit(|c| c == '/' || c == '?').next().unwrap_or("");
+    match file_name
+        .rsplit('.')
+        .next()
+        .unwrap_or("")
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "exe" => Some("exe"),
+        "msi" => Some("msi"),
+        _ => None,
+    }
+}
+
 #[tauri::command]
 async fn download_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
     if !cfg!(windows) {
@@ -570,6 +603,9 @@ async fn download_update(app: tauri::AppHandle, url: String) -> Result<(), Strin
     if !update_host_allowed(&url) {
         return Err(format!("Refusing to download update from untrusted host: {url}"));
     }
+    let Some(ext) = installer_ext_from_url(&url) else {
+        return Err(format!("Unsupported installer type in update URL: {url}"));
+    };
     let client = reqwest::Client::builder()
         .user_agent("MLBV/1.0")
         .build().map_err(|e| e.to_string())?;
@@ -581,7 +617,7 @@ async fn download_update(app: tauri::AppHandle, url: String) -> Result<(), Strin
     }
 
     let total = resp.content_length().unwrap_or(0);
-    let tmp_path = std::env::temp_dir().join("mlbv-update.exe");
+    let tmp_path = std::env::temp_dir().join(format!("mlbv-update.{ext}"));
     let mut file = std::fs::File::create(&tmp_path)
         .map_err(|e| format!("Cannot create temp file: {e}"))?;
     let mut downloaded: u64 = 0;
@@ -601,33 +637,51 @@ async fn download_update(app: tauri::AppHandle, url: String) -> Result<(), Strin
     Ok(())
 }
 
-// Run the downloaded installer with the real install path, then exit
+// Run the downloaded installer, then exit. `kind` is "exe" (silent NSIS) or
+// "msi" (interactive wizard through the Windows Installer service).
 #[tauri::command]
-fn apply_update(app: tauri::AppHandle, new_version: String) -> Result<(), String> {
+fn apply_update(app: tauri::AppHandle, new_version: String, kind: String) -> Result<(), String> {
     if !cfg!(windows) {
         return Err("Self-update is only supported on Windows.".to_string());
     }
-    let tmp_path = std::env::temp_dir().join("mlbv-update.exe");
-    if !tmp_path.exists() {
-        return Err("Update installer not found".to_string());
-    }
-
-    let install_dir = std::env::current_exe()
-        .map_err(|e| e.to_string())?
-        .parent()
-        .ok_or_else(|| "Cannot determine install directory".to_string())?
-        .to_path_buf();
 
     // Write the new version so the next launch can show "Updated to vX" toast
     let marker = std::env::temp_dir().join("mlbv-just-updated.txt");
     let _ = std::fs::write(&marker, &new_version);
 
-    // NSIS silent install: /S = silent, /D= = destination (must be last, no quotes)
-    std::process::Command::new(&tmp_path)
-        .arg("/S")
-        .arg(format!("/D={}", install_dir.to_string_lossy()))
-        .spawn()
-        .map_err(|e| format!("Failed to start installer: {e}"))?;
+    match kind.as_str() {
+        "msi" => {
+            let msi_path = std::env::temp_dir().join("mlbv-update.msi");
+            if !msi_path.exists() {
+                return Err("Update package not found".to_string());
+            }
+            std::process::Command::new("msiexec")
+                .arg("/i")
+                .arg(&msi_path)
+                .spawn()
+                .map_err(|e| format!("Failed to start installer: {e}"))?;
+        }
+        "exe" => {
+            let tmp_path = std::env::temp_dir().join("mlbv-update.exe");
+            if !tmp_path.exists() {
+                return Err("Update installer not found".to_string());
+            }
+
+            let install_dir = std::env::current_exe()
+                .map_err(|e| e.to_string())?
+                .parent()
+                .ok_or_else(|| "Cannot determine install directory".to_string())?
+                .to_path_buf();
+
+            // NSIS silent install: /S = silent, /D= = destination (must be last, no quotes)
+            std::process::Command::new(&tmp_path)
+                .arg("/S")
+                .arg(format!("/D={}", install_dir.to_string_lossy()))
+                .spawn()
+                .map_err(|e| format!("Failed to start installer: {e}"))?;
+        }
+        other => return Err(format!("Unknown installer kind: {other}")),
+    }
 
     std::thread::sleep(std::time::Duration::from_millis(400));
     app.exit(0);
@@ -1234,6 +1288,35 @@ mod tests {
             "file:///C:/Windows/evil.exe",
         ] {
             assert!(!update_host_allowed(bad), "{bad:?} must be rejected");
+        }
+    }
+
+    #[test]
+    fn installer_ext_from_url_accepts_exe_and_msi_only() {
+        assert_eq!(
+            installer_ext_from_url(
+                "https://github.com/MLBVbyvlal/launcher/releases/download/v0.0.5/MLBV_0.0.5_x64-setup.exe"
+            ),
+            Some("exe")
+        );
+        assert_eq!(
+            installer_ext_from_url(
+                "https://objects.githubusercontent.com/abc/MLBV_0.0.5_x64_en-US.msi?token=zz"
+            ),
+            Some("msi")
+        );
+        assert_eq!(
+            installer_ext_from_url("https://github.com/x/y/releases/download/v1/setup.EXE"),
+            Some("exe")
+        );
+        for bad in [
+            "https://example.com/setup.zip",
+            "https://example.com/noext",
+            "https://example.com/fake.exe/real.msi.bak",
+            "not a url",
+            "",
+        ] {
+            assert_eq!(installer_ext_from_url(bad), None, "{bad:?} must be rejected");
         }
     }
 }

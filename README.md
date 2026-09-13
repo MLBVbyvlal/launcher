@@ -92,15 +92,15 @@ work. Issues and pull requests may go unanswered.
 - Crash dialog with the last 80 lines of output when the game exits with a non-zero code.
 - Accent colour theming (8 presets + custom hex), collapsible sidebar, swipe between the Minecraft
   and LiquidBounce tabs, hide-launcher-on-launch.
-- English and Russian UI (258 keys per language).
+- English and Russian UI (263 keys per language).
 
 ---
 
 ## Requirements
 
 **To run the built app:** Windows 10/11 x64 with WebView2 (present by default on current Windows),
-or 64-bit Linux with WebKitGTK 4.1 (a dependency of the `.deb`, installed automatically;
-`.AppImage` users need it from their distro).
+or 64-bit Linux with WebKitGTK 4.1 (a dependency of the `.deb`/`.rpm`, installed automatically;
+`.AppImage` users need it from their distro; the Flatpak bundles its own runtime).
 
 **To build it:**
 
@@ -115,8 +115,8 @@ or 64-bit Linux with WebKitGTK 4.1 (a dependency of the `.deb`, installed automa
 ## Install
 
 Grab the latest installer from the [Releases](https://github.com/MLBVbyvlal/launcher/releases) page —
-`MLBV_0.0.4_x64-setup.exe` (NSIS) or `MLBV_0.0.4_x64_en-US.msi` for Windows, `.deb` or
-`.AppImage` for Linux.
+`MLBV_0.0.4_x64-setup.exe` (NSIS) or `MLBV_0.0.4_x64_en-US.msi` for Windows; `.deb`, `.rpm`,
+`.AppImage` or `.flatpak` for Linux.
 
 ## Build from source
 
@@ -140,7 +140,9 @@ The first Rust build takes 5–15 minutes; later ones are much faster.
 
 CI runs five steps on every push: type-check and bundle, `cargo check --locked
 --all-targets`, `cargo test --locked`, a full Windows installer build, and Linux packages
-(.deb/.AppImage). See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+(.deb/.rpm/.AppImage). Pushing a version tag runs the Release workflow instead: it rebuilds
+all installers plus the Flatpak bundle and attaches them to the GitHub release.
+See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and [`release.yml`](.github/workflows/release.yml).
 
 ## Where data lives
 
@@ -206,7 +208,9 @@ The launcher talks to these endpoints directly. None of them are proxied through
 
 Verified against the code, not guessed:
 
-1. **Auto-update is Windows-only** (NSIS silent install `/S /D=`). On Linux the updater commands
+1. **Auto-update is Windows-only**: the update dialog offers the NSIS `.exe` (recommended —
+   silent install `/S /D=`) or the WiX `.msi` (guided install through the Windows Installer
+   service). On Linux the updater commands
    refuse to run and the update UI is hidden. The check considers all non-draft
    GitHub releases and offers the newest one that is newer than the running build; candidates marked
    pre-release are shown with a warning. Check failures are no longer swallowed silently — they are

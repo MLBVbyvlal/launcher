@@ -20,7 +20,7 @@ type VFilter    = 'release' | 'snapshot' | 'old' | 'all'
 type LoaderVersionInfo = { version: string; stable: boolean; latest: boolean }
 type AppState   = 'loading' | 'ready' | 'error'
 type Tab        = 'mc' | 'lb'
-type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string; assetUrl: string; unstableWarning?: boolean }
+type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string; assetUrl: string; msiUrl: string; unstableWarning?: boolean }
 
 const spring = { type: 'spring', stiffness: 400, damping: 30 } as const
 
@@ -196,7 +196,7 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   const [countdown, setCountdown]           = useState(5)
   const [deleting, setDeleting]             = useState(false)
   const [updateStatus, setUpdateStatus]     = useState<'idle' | 'checking' | 'uptodate' | { version: string; htmlUrl: string } | { error: string }>('idle')
-  // The self-updater is Windows-only (NSIS); its UI is hidden elsewhere.
+  // The self-updater is Windows-only (NSIS/MSI); its UI is hidden elsewhere.
   const [osName, setOsName] = useState('')
   useEffect(() => {
     if (isTauri) invoke<Record<string, unknown>>('get_debug_info').then(d => setOsName(String(d.os ?? ''))).catch(() => {})
@@ -1474,9 +1474,16 @@ function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void 
   const [phase, setPhase] = useState<'ask' | 'downloading' | 'installing'>('ask')
   const [percent, setPercent] = useState(0)
   const [dlError, setDlError] = useState('')
+  const [format, setFormat] = useState<'exe' | 'msi'>('exe')
+  // Old hand-assembled releases may carry only one installer — offer what exists.
+  const hasExe = !!info.assetUrl
+  const hasMsi = !!info.msiUrl
+  const showChoice = hasExe && hasMsi
+  const effectiveFormat = showChoice ? format : hasExe ? 'exe' : 'msi'
 
   const handleDownload = async () => {
-    if (!isTauri || !info.assetUrl) {
+    const url = effectiveFormat === 'msi' ? info.msiUrl : info.assetUrl
+    if (!isTauri || !url) {
       invoke('open_url', { url: info.htmlUrl }).catch(() => {})
       onClose()
       return
@@ -1487,11 +1494,11 @@ function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void 
       setPercent(Math.round(e.payload.percent))
     })
     try {
-      await invoke('download_update', { url: info.assetUrl })
+      await invoke('download_update', { url })
       unlisten()
       setPhase('installing')
       await new Promise(r => setTimeout(r, 700))
-      await invoke('apply_update', { newVersion: info.version })
+      await invoke('apply_update', { newVersion: info.version, kind: effectiveFormat })
       // app.exit(0) is called in Rust; this line is a safety fallback
     } catch (e) {
       unlisten()
@@ -1533,6 +1540,25 @@ function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void 
             : <p className="update-nobody">{t('update.no_notes')}</p>
           }
           {dlError && <div className="inst-error" style={{ margin: '0 18px 10px' }}>{dlError}</div>}
+          {showChoice && (
+            <div style={{ padding: '0 18px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="field-label">{t('update.choose_format')}</div>
+              <label className={`reinstall-opt${format === 'exe' ? ' active' : ''}`} onClick={() => setFormat('exe')}>
+                <span className="reinstall-radio" />
+                <div>
+                  <div className="reinstall-opt-title">{t('update.format_exe')}</div>
+                  <div className="reinstall-opt-sub">{t('update.format_exe_desc')}</div>
+                </div>
+              </label>
+              <label className={`reinstall-opt${format === 'msi' ? ' active' : ''}`} onClick={() => setFormat('msi')}>
+                <span className="reinstall-radio" />
+                <div>
+                  <div className="reinstall-opt-title">{t('update.format_msi')}</div>
+                  <div className="reinstall-opt-sub">{t('update.format_msi_desc')}</div>
+                </div>
+              </label>
+            </div>
+          )}
           <div className="inst-modal-footer">
             <button className="btn-cancel" onClick={onClose}>{t('update.later')}</button>
             <button className="btn-ok" onClick={handleDownload}>{t('update.download')}</button>
@@ -1781,16 +1807,16 @@ export default function App() {
     invoke<string>('get_just_updated')
       .then(ver => { if (ver) { setJustUpdated(ver); setTimeout(() => setJustUpdated(null), 5000) } })
       .catch(() => {})
-    type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string; unstable_warning: boolean }
+    type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string; msi_url: string; unstable_warning: boolean }
     const checkForUpdate = () => {
       invoke<RawRelease | null>('check_for_update')
         .then(r => {
           setUpdateCheckError(null)
-          if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, unstableWarning: r.unstable_warning })
+          if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, msiUrl: r.msi_url, unstableWarning: r.unstable_warning })
         })
         .catch(e => setUpdateCheckError(String(e)))
     }
-    // The self-updater is Windows-only (NSIS); on other systems there is
+    // The self-updater is Windows-only (NSIS/MSI); on other systems there is
     // nothing to check for, so skip quietly instead of showing an error.
     invoke<Record<string, unknown>>('get_debug_info')
       .then(d => { if (d.os === 'windows') checkForUpdate() })

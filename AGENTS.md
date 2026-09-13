@@ -264,8 +264,9 @@ The values are in sync as of 2026-09-12. Note the asymmetry: the About screen sh
 `__APP_VERSION__` (hardcoded in Vite), the debug panel shows `CARGO_PKG_VERSION`. A bump that misses
 either one produces two different versions in one UI — update all five places.
 
-Releases are tagged `v0.0.x` or `beta0.0.x`; every release so far is a GitHub pre-release. The
-updater downloads `.exe` assets only.
+Releases are published from version tags by `release.yml` (Windows `.exe`+`.msi`, Linux
+`.deb`+`.rpm`+AppImage+Flatpak); every release so far is a GitHub pre-release. The updater
+offers the `.exe` (silent, recommended) or the `.msi` (setup wizard).
 
 ## 6. Landmines — verified problems, do not rediscover them
 
@@ -320,9 +321,10 @@ not accidentally "re-fixed" into a regression.
    `VersionJson` are non-optional — verify against real Mojang JSON before changing their types.
 9. **FIXED 2026-09-12 — updater.** `check_for_update` (`lib.rs`) considers all non-draft
    releases, sorts by semver and returns the newest one newer than `CARGO_PKG_VERSION`;
-   pre-release candidates set `unstable_warning`. Being up to date returns `None` (shown as
-   "up to date"), not an error; real check failures are shown in Settings → About
-   (no more silent `.catch(() => {})`).
+   pre-release candidates set `unstable_warning`, and both installer URLs (`.exe`, `.msi`)
+   travel in `ReleaseInfo` — the frontend only offers the ones present. Being up to date
+   returns `None` (shown as "up to date"), not an error; real check failures are shown in
+   Settings → About (no more silent `.catch(() => {})`).
 10. **FIXED 2026-09-12 — one game process at a time.** `GameState` now holds
     `children: Mutex<HashMap<String, Child>>` and
     `jvm_buffers: Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>`, keyed by instance name, and

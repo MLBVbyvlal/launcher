@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=MLBV
+Comment=Minecraft Launcher by vlalikoffc
+Exec=mlbv
+Icon=com.vlal.mlbv
+Terminal=false
+Categories=Game;
+StartupWMClass=mlbv
