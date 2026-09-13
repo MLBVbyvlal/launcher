@@ -92,7 +92,7 @@ export default function ModBrowser({ instanceName, mcVersion, loader, cfKey, ins
   const [installing, setInstalling] = useState<string | null>(null)
   const [installedIds, setInstalledIds] = useState<Set<string>>(new Set())
 
-  const scopeMc = mcVersion && mcVersion !== 'latest' ? `MC ${mcVersion}` : t('mods.all_versions')
+  const scopeMc = mcVersion ? `MC ${mcVersion}` : t('mods.all_versions')
   const scopeLoader = loader && loader !== 'vanilla' ? ` · ${loader}` : ''
 
   const runSearch = useCallback(async (src: Source, q: string, off: number, append: boolean) => {
