@@ -35,13 +35,15 @@ Facts about the current state:
 
 | Path | Lines | Role |
 |---|---|---|
-| `src-tauri/src/lib.rs` | ~1230 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mods, download controls, the single `launch_game` command and the `generate_handler!` list |
+| `src-tauri/src/lib.rs` | ~1300 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mod add/delete, download controls, the single `launch_game` command and the `generate_handler!` list |
 | `src-tauri/src/launcher.rs` | ~2360 | The launch pipeline (`launch` + the loader steps `prepare_loader` / `prepare_loader_stage`), per-instance process registry, Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
+| `src-tauri/src/mods.rs` | ~900 | Modrinth + CurseForge search/versions/install, per-instance mod index (`.mlbv-mods.json`), enable/disable (`.jar.disabled`), update checks |
 | `src-tauri/tests/` | ~60 | Integration tests: instance-name validation battery (black-box) |
 | `src-tauri/src/main.rs` | 6 | Windows entry point. Contains `windows_subsystem` — **do not touch** |
 | `src-tauri/tauri.conf.json` | 40 | Window, bundle targets, CSP, identifier |
 | `src-tauri/capabilities/*.json` | 34 | Tauri v2 permissions for the `main` and `console` windows |
-| `src/App.tsx` | ~2920 | The entire main UI, including every modal |
+| `src/App.tsx` | ~3110 | The entire main UI, including every modal |
+| `src/ModBrowser.tsx` | ~320 | In-app mod browser: Modrinth/CurseForge tabs, debounced search, version picker, install |
 | `src/SetupWizard.tsx` | ~545 | First-run wizard: language → prefs → account → Java |
 | `src/ConsoleWindow.tsx` | ~190 | Separate window that streams the output of one instance |
 | `src/LbConfigsPanel.tsx` | ~470 | LiquidBounce configs catalog (GitHub-backed, README sanitized with DOMPurify) |
@@ -254,11 +256,11 @@ update all of them and say so:
 
 | File | Field | Current value |
 |---|---|---|
-| `package.json` | `version` | `0.0.4` (was `beta0.0.4`, aligned 2026-09-12) |
-| `package-lock.json` | `version` (2 places) | `0.0.4` |
-| `src-tauri/tauri.conf.json` | `version` | `0.0.4` |
-| `src-tauri/Cargo.toml` | `version` | `0.0.4` (this is what `env!("CARGO_PKG_VERSION")` reports, and it drives the update check) |
-| `vite.config.ts` | `define.__APP_VERSION__` | `"0.0.4"` — hardcoded, shown in the About panel |
+| `package.json` | `version` | `0.0.5` (was `beta0.0.4`, aligned 2026-09-12; bumped 2026-09-13) |
+| `package-lock.json` | `version` (2 places) | `0.0.5` |
+| `src-tauri/tauri.conf.json` | `version` | `0.0.5` |
+| `src-tauri/Cargo.toml` | `version` | `0.0.5` (this is what `env!("CARGO_PKG_VERSION")` reports, and it drives the update check) |
+| `vite.config.ts` | `define.__APP_VERSION__` | `"0.0.5"` — hardcoded, shown in the About panel |
 
 The values are in sync as of 2026-09-12. Note the asymmetry: the About screen shows
 `__APP_VERSION__` (hardcoded in Vite), the debug panel shows `CARGO_PKG_VERSION`. A bump that misses

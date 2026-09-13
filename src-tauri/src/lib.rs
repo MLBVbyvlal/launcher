@@ -1,4 +1,5 @@
 pub mod launcher;
+pub mod mods;
 
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -966,29 +967,6 @@ fn rename_instance_data(old_name: String, new_name: String) -> Result<(), String
     std::fs::rename(&old_dir, &new_dir).map_err(|e| format!("Rename failed: {e}"))
 }
 
-#[derive(serde::Serialize)]
-struct ModInfo {
-    filename: String,
-}
-
-#[tauri::command]
-fn list_mods(instance_name: String) -> Vec<ModInfo> {
-    if launcher::valid_instance_name(&instance_name).is_err() { return vec![]; }
-    let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
-    if !mods_dir.exists() { return vec![]; }
-    std::fs::read_dir(&mods_dir)
-        .map(|rd| {
-            rd.flatten()
-                .filter_map(|e| {
-                    let name = e.file_name().to_string_lossy().into_owned();
-                    if name.ends_with(".jar") { Some(ModInfo { filename: name }) }
-                    else { None }
-                })
-                .collect()
-        })
-        .unwrap_or_default()
-}
-
 #[tauri::command]
 fn delete_mods(instance_name: String, filenames: Vec<String>) -> Result<(), String> {
     launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
@@ -1000,6 +978,7 @@ fn delete_mods(instance_name: String, filenames: Vec<String>) -> Result<(), Stri
             std::fs::remove_file(&path).map_err(|e| format!("Cannot delete {filename}: {e}"))?;
         }
     }
+    mods::forget_mods(&instance_name, &filenames);
     Ok(())
 }
 
@@ -1183,7 +1162,12 @@ pub fn run() {
             get_lb_installable_instances,
             scan_instances,
             save_instance_metadata,
-            list_mods,
+            mods::list_mods,
+            mods::search_mods,
+            mods::get_mod_versions,
+            mods::set_mod_enabled,
+            mods::install_mod_file,
+            mods::check_mod_updates,
             delete_mods,
             add_mod_file,
             open_mods_folder,

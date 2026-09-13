@@ -90,9 +90,12 @@ work. Issues and pull requests may go unanswered.
 - First-run setup wizard: language → preferences → account → Java provisioning.
 - Separate always-on-top **console window** streaming live game output.
 - Crash dialog with the last 80 lines of output when the game exits with a non-zero code.
+- **Mod manager**: browse and install from Modrinth and CurseForge without leaving the launcher
+  (CurseForge needs your free API key in Settings), icons + versions in the list, one-click
+  enable/disable, update checks with update-all, and one-click mod-list export.
 - Accent colour theming (8 presets + custom hex), collapsible sidebar, swipe between the Minecraft
   and LiquidBounce tabs, hide-launcher-on-launch.
-- English and Russian UI (263 keys per language).
+- English and Russian UI (285 keys per language).
 
 ---
 
@@ -115,7 +118,7 @@ or 64-bit Linux with WebKitGTK 4.1 (a dependency of the `.deb`/`.rpm`, installed
 ## Install
 
 Grab the latest installer from the [Releases](https://github.com/MLBVbyvlal/launcher/releases) page —
-`MLBV_0.0.4_x64-setup.exe` (NSIS) or `MLBV_0.0.4_x64_en-US.msi` for Windows; `.deb`, `.rpm`,
+`MLBV_0.0.5_x64-setup.exe` (NSIS) or `MLBV_0.0.5_x64_en-US.msi` for Windows; `.deb`, `.rpm`,
 `.AppImage` or `.flatpak` for Linux.
 
 ## Build from source
