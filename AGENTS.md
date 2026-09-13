@@ -202,7 +202,7 @@ npm run build                           # tsc + vite → dist/
 
 cd src-tauri
 cargo check --locked --all-targets       # compile the backend
-cargo test --locked                      # run the test suite (headless_launch stays ignored)
+cargo test --locked                      # run the test suite (examples/ never runs here)
 
 # Headless launch proof: boots a real Minecraft client in CI (needs network
 # + display, so it never runs in the normal suite — trigger it by hand)

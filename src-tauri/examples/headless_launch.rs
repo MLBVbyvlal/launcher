@@ -1,13 +1,18 @@
 //! Manual launch proof: boots a real Minecraft client through the actual
 //! `launcher::launch` pipeline (the same code the Play button runs) and
 //! asserts the JVM gets far enough to print its LWJGL banner into
-//! `latest.log`. Ignored by default — `cargo test` skips it; run it via the
-//! `launch-proof` workflow, or by hand under xvfb with network access:
-//! `cargo test --test headless_launch -- --ignored --nocapture`.
+//! `latest.log`. Run it via the `launch-proof` workflow, or by hand under
+//! xvfb with network access:
+//! `xvfb-run -a cargo run --locked --example headless_launch`.
 //!
-//! Needs: a display (real or xvfb — the test builds a real Tauri app),
-//! internet (Mojang + Adoptium), ~2 GB of disk for the shared cache and a few
-//! minutes on first run. MC version via `MLBV_PROOF_MC_VERSION` (default below).
+//! This is an example and not a test for one reason: building a Tauri app
+//! creates the platform event loop, which tao only allows on the main
+//! thread — and libtest never runs test fns there. An example's `main` is
+//! the main thread, so it just works. (`cargo test` never touches it.)
+//!
+//! Needs: a display (real or xvfb), internet (Mojang + Adoptium), ~2 GB of
+//! disk for the shared cache and a few minutes on first run. MC version via
+//! `MLBV_PROOF_MC_VERSION` (default below).
 //!
 //! Failure diagnostics are printed as GitHub workflow commands (`::notice`,
 //! `::error`) because raw CI logs live on blob storage that restricted
@@ -42,13 +47,13 @@ fn err_note(title: &str, msg: &str) {
     println!("::error title={}::{}", esc(title), esc(&msg));
 }
 
-#[test]
-#[ignore]
-fn vanilla_client_boots_headless() {
+fn main() {
     // No tokio macros in the dependency tree: the "macros" feature would pull
     // in tokio-macros and force a Cargo.lock update, so drive the async body
     // with an explicitly built current-thread runtime instead. Everything the
-    // pipeline needs (spawn, sleep, blocking threads) works on it.
+    // pipeline needs (spawn, sleep, blocking threads) works on it. Plain
+    // `main` (not a test fn) also keeps us on the main thread, where tao
+    // allows creating the event loop.
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
         .build()

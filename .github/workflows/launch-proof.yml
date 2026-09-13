@@ -81,7 +81,7 @@ jobs:
 
       - name: Boot real Minecraft through the launch pipeline
         working-directory: src-tauri
-        run: xvfb-run -a cargo test --locked --test headless_launch -- --ignored --nocapture
+        run: xvfb-run -a cargo run --locked --example headless_launch
 
       - name: Emit proof annotations
         if: always()
