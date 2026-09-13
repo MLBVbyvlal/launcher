@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use tauri::{Emitter, Manager};
@@ -1805,6 +1805,21 @@ fn map_legacy_assets(objects: &HashMap<String, AssetObj>, objs_dir: &PathBuf) ->
     Ok(())
 }
 
+/// Join a ZIP entry name onto `dest`, rejecting anything that would escape
+/// it (ZipSlip: `../`, absolute paths, Windows prefixes). A lexical
+/// `starts_with` check is not enough — `dest.join("../x")` still starts with
+/// `dest` as a string — so every component must be a plain segment.
+fn zip_entry_path(dest: &Path, name: &str) -> Option<PathBuf> {
+    let mut out = dest.to_path_buf();
+    for comp in Path::new(name).components() {
+        match comp {
+            Component::Normal(seg) => out.push(seg),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 fn extract_natives(zip_path: &PathBuf, dest: &PathBuf) -> Result<()> {
     let file = fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
@@ -1812,7 +1827,9 @@ fn extract_natives(zip_path: &PathBuf, dest: &PathBuf) -> Result<()> {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_string();
         if name.starts_with("META-INF") || name.ends_with('/') { continue; }
-        let out = dest.join(&name);
+        // Skip entries that would escape the natives dir (ZipSlip) instead of
+        // failing the whole launch — one hostile entry must not break the rest.
+        let Some(out) = zip_entry_path(dest, &name) else { continue; };
         if let Some(p) = out.parent() { fs::create_dir_all(p)?; }
         let mut f = fs::File::create(&out)?;
         std::io::copy(&mut entry, &mut f)?;
@@ -2129,7 +2146,8 @@ fn extract_zip_all(zip_path: &PathBuf, dest: &PathBuf) -> Result<()> {
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_string();
-        let out  = dest.join(&name);
+        // Same ZipSlip guard as extract_natives: stay inside dest or skip.
+        let Some(out) = zip_entry_path(dest, &name) else { continue; };
         if name.ends_with('/') || name.ends_with('\\') {
             fs::create_dir_all(&out)?;
             continue;
@@ -2321,5 +2339,19 @@ mod tests {
 
         // Best-effort cleanup of the scratch dir; a leftover is harmless.
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn zip_entry_path_blocks_escapes() {
+        let dest = std::env::temp_dir().join("mlbv-test-zip");
+        assert_eq!(
+            zip_entry_path(&dest, "linux/x86_64/lib.so"),
+            Some(dest.join("linux").join("x86_64").join("lib.so"))
+        );
+        // Only portable cases: backslash and drive-letter handling differs
+        // between Windows and Unix, but these three are rejected everywhere.
+        for evil in ["../evil.dll", "a/../../evil.dll", "/abs/evil.dll"] {
+            assert_eq!(zip_entry_path(&dest, evil), None, "{evil:?} must not escape");
+        }
     }
 }
