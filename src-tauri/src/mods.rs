@@ -793,7 +793,9 @@ pub async fn check_mod_updates(
                 && dir.join(f).exists()
         })
         .collect();
-    let mut set = tokio::task::JoinSet::new();
+    // The turbofish pins the task error to String: without it the `?` on
+    // `latest_mod_file` leaves JoinSet's error type ambiguous (E0282).
+    let mut set = tokio::task::JoinSet::<Result<Option<ModUpdate>, String>>::new();
     for (filename, meta) in jobs {
         let mc = mc_version.clone();
         let ld = loader.clone();
