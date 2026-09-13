@@ -87,6 +87,8 @@ jobs:
         if: always()
         run: |
           LOG="$HOME/.mlbv/instances/ci-proof/logs/latest.log"
+          size=$(stat -c%s "$LOG" 2>/dev/null || echo MISSING)
+          echo "::notice title=proof-log::$size bytes at $LOG"
           if [ -f "$LOG" ] && grep -q "LWJGL Version" "$LOG"; then
             line=$(grep -m1 "LWJGL Version" "$LOG" | head -c 300 | tr -d '\r\n' | sed 's/%/%25/g')
             ogl=$(grep -m1 -i "OpenGL:" "$LOG" | head -c 300 | tr -d '\r\n' | sed 's/%/%25/g')
