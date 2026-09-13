@@ -72,6 +72,10 @@ jobs:
           set -e
           exit $code
 
+      - name: cargo test --locked
+        working-directory: src-tauri
+        run: cargo test --locked
+
       # Raw job logs live on *.blob.core.windows.net, which restricted sandboxes
       # cannot reach; annotations are served from api.github.com instead, so a
       # failing compile stays readable without downloading the log.

@@ -23,9 +23,10 @@ Facts about the current state:
   maintenance fixes (security, data integrity, broken updater) and the launch-pipeline
   consolidation were applied on 2026-09-12 — see §6 for what was fixed and what is still open.
 - History is squashed and unhelpful (original sprint: 15 commits over two days).
-- ~9 600 lines of first-party code: ~3 400 Rust, ~6 200 TypeScript/CSS
-  (measured 2026-09-12 after the launch-pipeline consolidation).
-- **No tests, no linter, no formatter config.** CI compiles; it does not verify behaviour.
+- ~9 850 lines of first-party code: ~3 650 Rust (including tests), ~6 200 TypeScript/CSS
+  (measured 2026-09-13).
+- Unit/integration tests cover the pure helpers (`cargo test`, also run in CI);
+  **no linter, no formatter config.** The launch pipeline itself has no behaviour tests.
 - All published releases are marked as GitHub *pre-releases*. The updater now considers them
   (fixed 2026-09-12; see §6, landmine 9).
 
@@ -33,8 +34,9 @@ Facts about the current state:
 
 | Path | Lines | Role |
 |---|---|---|
-| `src-tauri/src/lib.rs` | ~1110 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mods, download controls, the single `launch_game` command and the `generate_handler!` list |
-| `src-tauri/src/launcher.rs` | ~2290 | The launch pipeline (`launch` + the loader steps `prepare_loader` / `prepare_loader_stage`), per-instance process registry, Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
+| `src-tauri/src/lib.rs` | ~1230 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mods, download controls, the single `launch_game` command and the `generate_handler!` list |
+| `src-tauri/src/launcher.rs` | ~2360 | The launch pipeline (`launch` + the loader steps `prepare_loader` / `prepare_loader_stage`), per-instance process registry, Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
+| `src-tauri/tests/` | ~60 | Integration tests: instance-name validation battery (black-box) |
 | `src-tauri/src/main.rs` | 6 | Windows entry point. Contains `windows_subsystem` — **do not touch** |
 | `src-tauri/tauri.conf.json` | 40 | Window, bundle targets, CSP, identifier |
 | `src-tauri/capabilities/*.json` | 34 | Tauri v2 permissions for the `main` and `console` windows |
@@ -199,6 +201,7 @@ npm run build                           # tsc + vite → dist/
 
 cd src-tauri
 cargo check --locked --all-targets       # compile the backend
+cargo test --locked                      # run the test suite
 ```
 
 Full installer build (Windows only, slow):

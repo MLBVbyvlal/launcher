@@ -134,8 +134,8 @@ npm ci
 On Windows, `run.bat` wraps `npm run tauri dev` and checks that Node and Cargo are on `PATH`.
 The first Rust build takes 5–15 minutes; later ones are much faster.
 
-CI runs all three of the above on every push: type-check and bundle, `cargo check --locked
---all-targets`, and a full Windows installer build. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs all four steps on every push: type-check and bundle, `cargo check --locked
+--all-targets`, `cargo test --locked`, and a full Windows installer build. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
 
 ## Where data lives
 
@@ -166,6 +166,7 @@ src-tauri/
   src/launcher.rs   One launch pipeline with per-loader steps (vanilla / LiquidBounce /
                     Fabric / Quilt / Forge / NeoForge), the per-instance process
                     registry, Java provisioning, ZIP extraction, helpers
+  tests/            Integration tests (instance-name validation battery)
   tauri.conf.json   Window config, bundle targets, identifier (com.vlal.mlbv)
   capabilities/     Tauri v2 permission sets for the main and console windows
 src/
@@ -208,7 +209,7 @@ Verified against the code, not guessed:
    progress/speed events are global, so a second *launch* is refused ("Another game is launching")
    until the first one has started. There is also a single console window: opening it for another
    instance closes the previous one.
-3. **No tests and no linter.** CI compiles the project; it does not verify behaviour.
+3. **Tests cover the pure helpers only, and there is no linter.** `cargo test` (unit tests next to the code plus `src-tauri/tests/`, run in CI) pins down instance-name validation, version parsing, stability markers, ZIP path guards and Java probing — but the launch pipeline itself has no automated behaviour tests.
 4. **Instance recovery is name-based.** If a `.mlbv-instance.json` metadata file is missing or
    corrupt, a recovered instance falls back to a filesystem guess (LiquidBounce instances lose their
    build id and must be re-picked before launching).

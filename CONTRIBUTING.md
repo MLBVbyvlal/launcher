@@ -49,16 +49,19 @@ npm ci
 | `npm run build` | `tsc` + `vite build` → `dist/`. |
 | `npm run tauri build -- --bundles nsis,msi` | Release build + installers in `src-tauri/target/release/bundle/`. |
 | `cd src-tauri && cargo check --locked --all-targets` | Compile-check the backend. |
+| `cd src-tauri && cargo test --locked` | Run the Rust test suite (unit + integration). |
 | `cd src-tauri && cargo fmt` | Format Rust. No config beyond rustfmt defaults. |
 
 On Windows, `run.bat` wraps `npm run tauri dev` and verifies Node and Cargo are on `PATH`.
 
-There is **no test suite and no linter** in this repository. If you add logic that can be tested
-(parsing, version comparison, path building, argument resolution), propose the test harness in your
-pull request instead of dropping in a dependency silently.
+There is a Rust test suite using the built-in harness (no extra dependencies): unit tests live
+next to the code in `#[cfg(test)]` modules, black-box integration tests live in `src-tauri/tests/`.
+If you add testable logic (parsing, version comparison, path building, argument resolution), cover
+it the same way. There is **no linter**.
 
-CI (`.github/workflows/ci.yml`) runs three jobs on every push: type-check + bundle, `cargo check` on
-Linux, and a full Windows installer build. Run the same steps locally before opening a PR.
+CI (`.github/workflows/ci.yml`) runs three jobs on every push: type-check + bundle, `cargo check`
+plus `cargo test` on Linux, and a full Windows installer build. Run the same steps locally before
+opening a PR.
 
 ## Project layout
 
