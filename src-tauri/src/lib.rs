@@ -540,8 +540,28 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
 }
 
 // Download the update installer to %TEMP% and emit progress events
+/// Only GitHub release hosts are trusted for update downloads. The URL comes
+/// from our own release metadata, but `download_update` fetches an executable
+/// and `apply_update` runs it — so an arbitrary URL must never be accepted,
+/// even if the release JSON was tampered with.
+fn update_host_allowed(url: &str) -> bool {
+    const TRUSTED_HOSTS: [&str; 3] = [
+        "github.com",
+        "objects.githubusercontent.com",
+        "release-assets.githubusercontent.com",
+    ];
+    let Ok(parsed) = url::Url::parse(url) else { return false };
+    if parsed.scheme() != "https" { return false; }
+    let Some(host) = parsed.host_str() else { return false; };
+    let host = host.to_ascii_lowercase();
+    TRUSTED_HOSTS.contains(&host.as_str())
+}
+
 #[tauri::command]
 async fn download_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    if !update_host_allowed(&url) {
+        return Err(format!("Refusing to download update from untrusted host: {url}"));
+    }
     let client = reqwest::Client::builder()
         .user_agent("MLBV/1.0")
         .build().map_err(|e| e.to_string())?;
@@ -1178,5 +1198,31 @@ mod tests {
         assert!(tag_latest(vec![]).is_empty());
         let none_stable = tag_latest(vec![mk("2.0-beta", false)]);
         assert!(!none_stable[0].latest);
+    }
+
+    #[test]
+    fn update_host_allowed_trusts_github_release_hosts_only() {
+        assert!(update_host_allowed(
+            "https://github.com/MLBVbyvlal/launcher/releases/download/v0.0.4/MLBV_setup.exe"
+        ));
+        assert!(update_host_allowed(
+            "https://objects.githubusercontent.com/abc123/MLBV_setup.exe"
+        ));
+        assert!(update_host_allowed(
+            "https://release-assets.githubusercontent.com/abc123/MLBV_setup.exe"
+        ));
+        assert!(update_host_allowed(
+            "https://GITHUB.COM/MLBVbyvlal/launcher/releases/download/v0.0.4/x.exe"
+        ));
+        for bad in [
+            "https://evil.com/MLBV_setup.exe",
+            "https://github.com.evil.com/x.exe",
+            "http://github.com/MLBVbyvlal/launcher/releases/download/v0.0.4/x.exe",
+            "not a url",
+            "",
+            "file:///C:/Windows/evil.exe",
+        ] {
+            assert!(!update_host_allowed(bad), "{bad:?} must be rejected");
+        }
     }
 }
