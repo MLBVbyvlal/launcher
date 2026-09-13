@@ -582,7 +582,10 @@ fn update_host_allowed(url: &str) -> bool {
 /// from the file name at the end of the URL. Anything else is rejected, so
 /// `download_update` and `apply_update` can never disagree about the file.
 fn installer_ext_from_url(url: &str) -> Option<&str> {
-    let file_name = url.rsplit(|c| c == '/' || c == '?').next().unwrap_or("");
+    // Signed asset URLs carry a query string (?token=…); strip it first —
+    // the file name is the last segment of the path, not of the whole URL.
+    let path = url.split('?').next().unwrap_or("");
+    let file_name = path.rsplit('/').next().unwrap_or("");
     match file_name
         .rsplit('.')
         .next()
