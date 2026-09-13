@@ -90,15 +90,20 @@ work. Issues and pull requests may go unanswered.
 - First-run setup wizard: language → preferences → account → Java provisioning.
 - Separate always-on-top **console window** streaming live game output.
 - Crash dialog with the last 80 lines of output when the game exits with a non-zero code.
+- **Mod manager**: browse and install from Modrinth and CurseForge without leaving the launcher
+  (CurseForge needs your free API key in Settings), icons + versions in the list, one-click
+  enable/disable, update checks with update-all, and one-click mod-list export.
 - Accent colour theming (8 presets + custom hex), collapsible sidebar, swipe between the Minecraft
   and LiquidBounce tabs, hide-launcher-on-launch.
-- English and Russian UI (258 keys per language).
+- English and Russian UI (285 keys per language).
 
 ---
 
 ## Requirements
 
-**To run the built app:** Windows 10/11 x64 with WebView2 (present by default on current Windows).
+**To run the built app:** Windows 10/11 x64 with WebView2 (present by default on current Windows),
+or 64-bit Linux with WebKitGTK 4.1 (a dependency of the `.deb`/`.rpm`, installed automatically;
+`.AppImage` users need it from their distro; the Flatpak bundles its own runtime).
 
 **To build it:**
 
@@ -113,7 +118,8 @@ work. Issues and pull requests may go unanswered.
 ## Install
 
 Grab the latest installer from the [Releases](https://github.com/MLBVbyvlal/launcher/releases) page —
-`MLBV_0.0.4_x64-setup.exe` (NSIS) or `MLBV_0.0.4_x64_en-US.msi`. Only Windows builds are published.
+`MLBV_0.0.5_x64-setup.exe` (NSIS) or `MLBV_0.0.5_x64_en-US.msi` for Windows; `.deb`, `.rpm`,
+`.AppImage` or `.flatpak` for Linux.
 
 ## Build from source
 
@@ -131,11 +137,15 @@ npm ci
 | `npm run tauri build` | Release build + installers in `src-tauri/target/release/bundle/`. |
 | `cd src-tauri && cargo check` | Compile-check the Rust backend without producing binaries. |
 
-On Windows, `run.bat` wraps `npm run tauri dev` and checks that Node and Cargo are on `PATH`.
+On Windows, `run.bat` wraps `npm run tauri dev` and checks that Node and Cargo are on `PATH`;
+`run.sh` is the Linux/macOS equivalent.
 The first Rust build takes 5–15 minutes; later ones are much faster.
 
-CI runs all three of the above on every push: type-check and bundle, `cargo check --locked
---all-targets`, and a full Windows installer build. See [`.github/workflows/ci.yml`](.github/workflows/ci.yml).
+CI runs five steps on every push: type-check and bundle, `cargo check --locked
+--all-targets`, `cargo test --locked`, a full Windows installer build, and Linux packages
+(.deb/.rpm/.AppImage). Pushing a version tag runs the Release workflow instead: it rebuilds
+all installers plus the Flatpak bundle and attaches them to the GitHub release.
+See [`.github/workflows/ci.yml`](.github/workflows/ci.yml) and [`release.yml`](.github/workflows/release.yml).
 
 ## Where data lives
 
@@ -166,6 +176,7 @@ src-tauri/
   src/launcher.rs   One launch pipeline with per-loader steps (vanilla / LiquidBounce /
                     Fabric / Quilt / Forge / NeoForge), the per-instance process
                     registry, Java provisioning, ZIP extraction, helpers
+  tests/            Integration tests (instance-name validation battery)
   tauri.conf.json   Window config, bundle targets, identifier (com.vlal.mlbv)
   capabilities/     Tauri v2 permission sets for the main and console windows
 src/
@@ -200,7 +211,10 @@ The launcher talks to these endpoints directly. None of them are proxied through
 
 Verified against the code, not guessed:
 
-1. **Auto-update is Windows-only** (NSIS silent install `/S /D=`). The check considers all non-draft
+1. **Auto-update is Windows-only**: the update dialog offers the NSIS `.exe` (recommended —
+   silent install `/S /D=`) or the WiX `.msi` (guided install through the Windows Installer
+   service). On Linux the updater commands
+   refuse to run and the update UI is hidden. The check considers all non-draft
    GitHub releases and offers the newest one that is newer than the running build; candidates marked
    pre-release are shown with a warning. Check failures are no longer swallowed silently — they are
    shown in Settings → About.
@@ -208,7 +222,7 @@ Verified against the code, not guessed:
    progress/speed events are global, so a second *launch* is refused ("Another game is launching")
    until the first one has started. There is also a single console window: opening it for another
    instance closes the previous one.
-3. **No tests and no linter.** CI compiles the project; it does not verify behaviour.
+3. **Tests cover the pure helpers only, and there is no linter.** `cargo test` (unit tests next to the code plus `src-tauri/tests/`, run in CI) pins down instance-name validation, version parsing, stability markers, ZIP path guards and Java probing — but the launch pipeline itself has no automated behaviour tests.
 4. **Instance recovery is name-based.** If a `.mlbv-instance.json` metadata file is missing or
    corrupt, a recovered instance falls back to a filesystem guess (LiquidBounce instances lose their
    build id and must be re-picked before launching).

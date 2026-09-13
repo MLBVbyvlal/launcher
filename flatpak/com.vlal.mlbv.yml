@@ -1,0 +1,43 @@
+# MLBV Flatpak packaging. The Rust binary is built outside flatpak (see the
+# flatpak job in release.yml) and wrapped here with a desktop file, icons and
+# AppStream metadata; the GNOME runtime provides GTK + WebKitGTK, so the
+# bundle carries no toolkit of its own. `staging/` is created by CI and holds
+# the compiled binary plus the icons (never committed).
+app-id: com.vlal.mlbv
+runtime: org.gnome.Platform
+runtime-version: '47'
+sdk: org.gnome.Sdk
+command: mlbv
+finish-args:
+  - --share=ipc
+  - --socket=x11
+  - --socket=wayland
+  - --share=network
+  - --device=dri
+  - --socket=pulseaudio
+  # The launcher keeps ~/.mlbv (instances, shared Java, caches); Minecraft
+  # also needs the real home for GL drivers and game files.
+  - --filesystem=home
+modules:
+  - name: mlbv
+    buildsystem: simple
+    build-commands:
+      - install -Dm755 mlbv /app/bin/mlbv
+      - install -Dm644 com.vlal.mlbv.desktop /app/share/applications/com.vlal.mlbv.desktop
+      - install -Dm644 com.vlal.mlbv.metainfo.xml /app/share/metainfo/com.vlal.mlbv.metainfo.xml
+      - install -Dm644 icon-32.png /app/share/icons/hicolor/32x32/apps/com.vlal.mlbv.png
+      - install -Dm644 icon-128.png /app/share/icons/hicolor/128x128/apps/com.vlal.mlbv.png
+      - install -Dm644 icon-256.png /app/share/icons/hicolor/256x256/apps/com.vlal.mlbv.png
+    sources:
+      - type: file
+        path: staging/mlbv
+      - type: file
+        path: staging/icon-32.png
+      - type: file
+        path: staging/icon-128.png
+      - type: file
+        path: staging/icon-256.png
+      - type: file
+        path: com.vlal.mlbv.desktop
+      - type: file
+        path: com.vlal.mlbv.metainfo.xml

@@ -28,8 +28,9 @@ instead of guessing; and never commit a secret or personal data (see *Secrets an
 | Rust | stable (edition 2021) | `rustup` is the usual way |
 | Tauri prerequisites | per OS | Windows: WebView2 + VS C++ Build Tools · Linux: `libwebkit2gtk-4.1-dev`, `libayatana-appindicator3-dev`, `librsvg2-dev`, `libxdo-dev`, `libssl-dev`, `build-essential`, `pkg-config` · macOS: Xcode CLT |
 
-The launcher targets Windows. Linux and macOS compile, but installers and the self-updater are
-Windows-only (NSIS).
+The launcher targets Windows and Linux: CI builds NSIS/MSI installers and `.deb`/`.rpm`/`.AppImage`
+packages (plus a Flatpak bundle on release tags). macOS compiles, but no packages are published
+for it. The in-app self-updater is Windows-only (NSIS/MSI).
 
 ## Setup
 
@@ -49,16 +50,19 @@ npm ci
 | `npm run build` | `tsc` + `vite build` → `dist/`. |
 | `npm run tauri build -- --bundles nsis,msi` | Release build + installers in `src-tauri/target/release/bundle/`. |
 | `cd src-tauri && cargo check --locked --all-targets` | Compile-check the backend. |
+| `cd src-tauri && cargo test --locked` | Run the Rust test suite (unit + integration). |
 | `cd src-tauri && cargo fmt` | Format Rust. No config beyond rustfmt defaults. |
 
 On Windows, `run.bat` wraps `npm run tauri dev` and verifies Node and Cargo are on `PATH`.
 
-There is **no test suite and no linter** in this repository. If you add logic that can be tested
-(parsing, version comparison, path building, argument resolution), propose the test harness in your
-pull request instead of dropping in a dependency silently.
+There is a Rust test suite using the built-in harness (no extra dependencies): unit tests live
+next to the code in `#[cfg(test)]` modules, black-box integration tests live in `src-tauri/tests/`.
+If you add testable logic (parsing, version comparison, path building, argument resolution), cover
+it the same way. There is **no linter**.
 
-CI (`.github/workflows/ci.yml`) runs three jobs on every push: type-check + bundle, `cargo check` on
-Linux, and a full Windows installer build. Run the same steps locally before opening a PR.
+CI (`.github/workflows/ci.yml`) runs four jobs on every push: type-check + bundle, `cargo check`
+plus `cargo test` on Linux, a full Windows installer build, and Linux packages. Run the same steps
+locally before opening a PR.
 
 ## Project layout
 
@@ -133,15 +137,15 @@ Do not bump the version, create a tag, or publish a release unless the maintaine
 
 ## Release process (maintainer)
 
-1. Bump the version everywhere (table above) and update the changelog text in the release body.
-2. `npm run tauri build -- --bundles nsis,msi`, or let CI produce the installers as artifacts.
-3. Create a GitHub release with a tag (`v0.0.x` or `beta0.0.x`) and attach the `.exe` and `.msi`.
-4. The in-app updater looks for the first asset whose name ends in `.exe` and runs it with
-   `/S /D=<install dir>`, so **the NSIS `.exe` must be attached**; the MSI is for manual installs.
-   Note that the current update check also requires the release to satisfy the pre-release filter —
-   see landmine 9 in `AGENTS.md` before expecting the updater to fire.
-5. Releases have been published as pre-releases so far. Keep the convention consistent, and if you
-   change it, update `check_for_update`'s expectations and `README.md` together.
+1. Bump the version everywhere (table above).
+2. Push a tag (`v0.0.x`, `beta0.0.x`, `release0.0.x` or `pre-release0.0.x`). The Release workflow
+   builds every installer — NSIS `.exe` + WiX `.msi`, `.deb` + `.rpm` + `.AppImage`, Flatpak bundle —
+   smoke-runs the Flatpak, and attaches everything to the tag's GitHub release. Tags starting with
+   `beta`/`pre-release` publish as pre-releases, the rest as full releases.
+3. To test without publishing: Actions → Release → Run workflow with `dry_run` on — the binaries
+   land in the run's artifacts instead of a release.
+4. The in-app updater reads that release and offers the `.exe` (silent `/S /D=` update,
+   recommended) or the `.msi` (guided install); pre-release candidates are shown with a warning.
 
 ## Secrets and personal data
 

@@ -12,7 +12,8 @@ explicitly in your report, and state what you skipped and why.
 ## 1. What this repository is
 
 MLBV is a Minecraft launcher: **Tauri 2** (Rust backend) + **React 19 / TypeScript** frontend,
-packaged for Windows. It implements the Minecraft launcher protocol directly — version manifest,
+packaged for Windows and Linux (the self-updater is Windows-only). It implements the Minecraft
+launcher protocol directly — version manifest,
 version JSON, asset index, libraries, natives, classpath, JVM arguments — plus five mod loaders
 (Fabric, Quilt, Forge, NeoForge, vanilla), LiquidBounce, Java provisioning, a configs catalog and a
 self-update check.
@@ -23,9 +24,10 @@ Facts about the current state:
   maintenance fixes (security, data integrity, broken updater) and the launch-pipeline
   consolidation were applied on 2026-09-12 — see §6 for what was fixed and what is still open.
 - History is squashed and unhelpful (original sprint: 15 commits over two days).
-- ~9 600 lines of first-party code: ~3 400 Rust, ~6 200 TypeScript/CSS
-  (measured 2026-09-12 after the launch-pipeline consolidation).
-- **No tests, no linter, no formatter config.** CI compiles; it does not verify behaviour.
+- ~9 850 lines of first-party code: ~3 650 Rust (including tests), ~6 200 TypeScript/CSS
+  (measured 2026-09-13).
+- Unit/integration tests cover the pure helpers (`cargo test`, also run in CI);
+  **no linter, no formatter config.** The launch pipeline itself has no behaviour tests.
 - All published releases are marked as GitHub *pre-releases*. The updater now considers them
   (fixed 2026-09-12; see §6, landmine 9).
 
@@ -33,12 +35,15 @@ Facts about the current state:
 
 | Path | Lines | Role |
 |---|---|---|
-| `src-tauri/src/lib.rs` | ~1110 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mods, download controls, the single `launch_game` command and the `generate_handler!` list |
-| `src-tauri/src/launcher.rs` | ~2290 | The launch pipeline (`launch` + the loader steps `prepare_loader` / `prepare_loader_stage`), per-instance process registry, Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
+| `src-tauri/src/lib.rs` | ~1300 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mod add/delete, download controls, the single `launch_game` command and the `generate_handler!` list |
+| `src-tauri/src/launcher.rs` | ~2360 | The launch pipeline (`launch` + the loader steps `prepare_loader` / `prepare_loader_stage`), per-instance process registry, Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
+| `src-tauri/src/mods.rs` | ~900 | Modrinth + CurseForge search/versions/install, per-instance mod index (`.mlbv-mods.json`), enable/disable (`.jar.disabled`), update checks |
+| `src-tauri/tests/` | ~60 | Integration tests: instance-name validation battery (black-box) |
 | `src-tauri/src/main.rs` | 6 | Windows entry point. Contains `windows_subsystem` — **do not touch** |
 | `src-tauri/tauri.conf.json` | 40 | Window, bundle targets, CSP, identifier |
 | `src-tauri/capabilities/*.json` | 34 | Tauri v2 permissions for the `main` and `console` windows |
-| `src/App.tsx` | ~2920 | The entire main UI, including every modal |
+| `src/App.tsx` | ~3110 | The entire main UI, including every modal |
+| `src/ModBrowser.tsx` | ~320 | In-app mod browser: Modrinth/CurseForge tabs, debounced search, version picker, install |
 | `src/SetupWizard.tsx` | ~545 | First-run wizard: language → prefs → account → Java |
 | `src/ConsoleWindow.tsx` | ~190 | Separate window that streams the output of one instance |
 | `src/LbConfigsPanel.tsx` | ~470 | LiquidBounce configs catalog (GitHub-backed, README sanitized with DOMPurify) |
@@ -199,6 +204,11 @@ npm run build                           # tsc + vite → dist/
 
 cd src-tauri
 cargo check --locked --all-targets       # compile the backend
+cargo test --locked                      # run the test suite (examples/ never runs here)
+
+# Headless launch proof: boots a real Minecraft client in CI (needs network
+# + display, so it never runs in the normal suite — trigger it by hand)
+gh workflow run launch-proof.yml
 ```
 
 Full installer build (Windows only, slow):
@@ -246,18 +256,19 @@ update all of them and say so:
 
 | File | Field | Current value |
 |---|---|---|
-| `package.json` | `version` | `0.0.4` (was `beta0.0.4`, aligned 2026-09-12) |
-| `package-lock.json` | `version` (2 places) | `0.0.4` |
-| `src-tauri/tauri.conf.json` | `version` | `0.0.4` |
-| `src-tauri/Cargo.toml` | `version` | `0.0.4` (this is what `env!("CARGO_PKG_VERSION")` reports, and it drives the update check) |
-| `vite.config.ts` | `define.__APP_VERSION__` | `"0.0.4"` — hardcoded, shown in the About panel |
+| `package.json` | `version` | `0.0.5` (was `beta0.0.4`, aligned 2026-09-12; bumped 2026-09-13) |
+| `package-lock.json` | `version` (2 places) | `0.0.5` |
+| `src-tauri/tauri.conf.json` | `version` | `0.0.5` |
+| `src-tauri/Cargo.toml` | `version` | `0.0.5` (this is what `env!("CARGO_PKG_VERSION")` reports, and it drives the update check) |
+| `vite.config.ts` | `define.__APP_VERSION__` | `"0.0.5"` — hardcoded, shown in the About panel |
 
 The values are in sync as of 2026-09-12. Note the asymmetry: the About screen shows
 `__APP_VERSION__` (hardcoded in Vite), the debug panel shows `CARGO_PKG_VERSION`. A bump that misses
 either one produces two different versions in one UI — update all five places.
 
-Releases are tagged `v0.0.x` or `beta0.0.x`; every release so far is a GitHub pre-release. The
-updater downloads `.exe` assets only.
+Releases are published from version tags by `release.yml` (Windows `.exe`+`.msi`, Linux
+`.deb`+`.rpm`+AppImage+Flatpak); every release so far is a GitHub pre-release. The updater
+offers the `.exe` (silent, recommended) or the `.msi` (setup wizard).
 
 ## 6. Landmines — verified problems, do not rediscover them
 
@@ -276,7 +287,8 @@ not accidentally "re-fixed" into a regression.
    (`rename_instance_data`, `lib.rs`). Residual: recovery without a metadata file is a filesystem
    guess (LB instances lose `buildId`).
 3. **FIXED 2026-09-12 — instance name validation.** `launcher::valid_instance_name` (whitelist:
-   ASCII alnum + space `_- . +`, length 1–64, no leading dot, no Windows device names) is called at
+   ASCII alnum + space `_- . +`, length 1–64, no leading dot, no Windows device names even
+   with an extension) is called at
    the entry of every command that takes `instance_name` (`lib.rs`). Do not move it to the UI.
 4. **FIXED 2026-09-12 — verified streaming downloads.** `download_file` (`launcher.rs`) streams
    to a `.part` file, checks size + SHA-1 (when the manifest has one) and renames on success.
@@ -311,8 +323,10 @@ not accidentally "re-fixed" into a regression.
    `VersionJson` are non-optional — verify against real Mojang JSON before changing their types.
 9. **FIXED 2026-09-12 — updater.** `check_for_update` (`lib.rs`) considers all non-draft
    releases, sorts by semver and returns the newest one newer than `CARGO_PKG_VERSION`;
-   pre-release candidates set `unstable_warning`. Check failures are shown in Settings → About
-   (no more silent `.catch(() => {})`).
+   pre-release candidates set `unstable_warning`, and both installer URLs (`.exe`, `.msi`)
+   travel in `ReleaseInfo` — the frontend only offers the ones present. Being up to date
+   returns `None` (shown as "up to date"), not an error; real check failures are shown in
+   Settings → About (no more silent `.catch(() => {})`).
 10. **FIXED 2026-09-12 — one game process at a time.** `GameState` now holds
     `children: Mutex<HashMap<String, Child>>` and
     `jvm_buffers: Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>`, keyed by instance name, and

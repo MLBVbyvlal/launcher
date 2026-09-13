@@ -2,7 +2,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::{Component, Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use tauri::{Emitter, Manager};
@@ -225,14 +225,16 @@ pub fn valid_instance_name(name: &str) -> Result<()> {
     if name.starts_with('.') || name == "." || name == ".." || name.ends_with('.') || name.ends_with(' ') {
         return Err(anyhow!("Invalid instance name (bad start/end character)"));
     }
-    // Windows reserved device names are reserved as the final path component.
+    // Windows reserves device names with any extension ("CON.txt" is still
+    // CON), so the stem before the first dot is what matters.
     let base = name.trim_end_matches(['.', ' ']).to_ascii_uppercase();
+    let stem = base.split('.').next().unwrap_or(base.as_str());
     const RESERVED: [&str; 17] = [
         "CON", "PRN", "AUX", "NUL",
         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
         "LPT1", "LPT2", "LPT3", "LPT4",
     ];
-    if RESERVED.contains(&base.as_str()) {
+    if RESERVED.contains(&stem) {
         return Err(anyhow!("Invalid instance name (Windows reserved name)"));
     }
     Ok(())
@@ -1803,6 +1805,21 @@ fn map_legacy_assets(objects: &HashMap<String, AssetObj>, objs_dir: &PathBuf) ->
     Ok(())
 }
 
+/// Join a ZIP entry name onto `dest`, rejecting anything that would escape
+/// it (ZipSlip: `../`, absolute paths, Windows prefixes). A lexical
+/// `starts_with` check is not enough — `dest.join("../x")` still starts with
+/// `dest` as a string — so every component must be a plain segment.
+fn zip_entry_path(dest: &Path, name: &str) -> Option<PathBuf> {
+    let mut out = dest.to_path_buf();
+    for comp in Path::new(name).components() {
+        match comp {
+            Component::Normal(seg) => out.push(seg),
+            _ => return None,
+        }
+    }
+    Some(out)
+}
+
 fn extract_natives(zip_path: &PathBuf, dest: &PathBuf) -> Result<()> {
     let file = fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
@@ -1810,7 +1827,9 @@ fn extract_natives(zip_path: &PathBuf, dest: &PathBuf) -> Result<()> {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_string();
         if name.starts_with("META-INF") || name.ends_with('/') { continue; }
-        let out = dest.join(&name);
+        // Skip entries that would escape the natives dir (ZipSlip) instead of
+        // failing the whole launch — one hostile entry must not break the rest.
+        let Some(out) = zip_entry_path(dest, &name) else { continue; };
         if let Some(p) = out.parent() { fs::create_dir_all(p)?; }
         let mut f = fs::File::create(&out)?;
         std::io::copy(&mut entry, &mut f)?;
@@ -2005,6 +2024,26 @@ fn find_java(root: &PathBuf, req: Option<&JavaVersionReq>) -> Option<PathBuf> {
         }
     }
 
+    // 4b. Same for Linux: distro packages live in /usr/lib/jvm, manual
+    // installs usually land in /usr/java or /opt.
+    #[cfg(target_os = "linux")]
+    {
+        let bases = ["/usr/lib/jvm", "/usr/java", "/opt", "/opt/java"];
+        for base in &bases {
+            if let Ok(rd) = std::fs::read_dir(base) {
+                let mut dirs: Vec<_> = rd.flatten()
+                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                    .collect();
+                dirs.sort_by_key(|e| folder_java_major(&e.file_name().to_string_lossy()).unwrap_or(0));
+                for entry in dirs.iter() {
+                    let ver = folder_java_major(&entry.file_name().to_string_lossy());
+                    let p = entry.path().join("bin").join(exe);
+                    if p.exists() && ver_compat(ver) { return Some(p); }
+                }
+            }
+        }
+    }
+
     // 5. PATH fallback (any version if no requirement)
     if req_major.is_none()
         && std::process::Command::new(exe).arg("-version").output().is_ok()
@@ -2127,7 +2166,8 @@ fn extract_zip_all(zip_path: &PathBuf, dest: &PathBuf) -> Result<()> {
     for i in 0..archive.len() {
         let mut entry = archive.by_index(i)?;
         let name = entry.name().to_string();
-        let out  = dest.join(&name);
+        // Same ZipSlip guard as extract_natives: stay inside dest or skip.
+        let Some(out) = zip_entry_path(dest, &name) else { continue; };
         if name.ends_with('/') || name.ends_with('\\') {
             fs::create_dir_all(&out)?;
             continue;
@@ -2282,6 +2322,76 @@ pub fn scan_java_installs() -> Vec<(u32, String)> {
         }
     }
 
+    // Same for Linux system installs.
+    #[cfg(target_os = "linux")]
+    {
+        let bases = ["/usr/lib/jvm", "/usr/java", "/opt", "/opt/java"];
+        for base in &bases {
+            if let Ok(rd) = std::fs::read_dir(base) {
+                for entry in rd.flatten() {
+                    if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if let Some(major) = folder_java_major(&name) {
+                        let p = entry.path().join("bin").join(exe);
+                        if p.exists() && !found.iter().any(|(v, _)| *v == major) {
+                            found.push((major, entry.path().to_string_lossy().into_owned()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     found.sort_by_key(|(v, _)| *v);
     found
+}
+
+// ─── Unit tests ──────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_java_major_reads_first_real_version() {
+        assert_eq!(folder_java_major("jre-8"), Some(8));
+        assert_eq!(folder_java_major("jre-21"), Some(21));
+        assert_eq!(folder_java_major("jdk-17.0.9"), Some(17));
+        assert_eq!(folder_java_major("temurin-8-jre"), Some(8));
+        // Old-style "1.8" numbering still resolves to Java 8.
+        assert_eq!(folder_java_major("jdk1.8.0_392"), Some(8));
+        assert_eq!(folder_java_major("17"), Some(17));
+        assert_eq!(folder_java_major("jdk-7"), None);
+        assert_eq!(folder_java_major("java"), None);
+        assert_eq!(folder_java_major(""), None);
+    }
+
+    #[test]
+    fn find_java_exe_recursive_searches_nested_dirs() {
+        let root = std::env::temp_dir().join(format!("mlbv-test-java-{}", std::process::id()));
+        let nested = root.join("jdk-21").join("bin");
+        std::fs::create_dir_all(&nested).unwrap();
+        let exe = if cfg!(windows) { "javaw.exe" } else { "java" };
+        std::fs::write(nested.join(exe), b"fake").unwrap();
+
+        assert_eq!(find_java_exe_recursive(&root, exe), Some(nested.join(exe)));
+        assert_eq!(find_java_exe_recursive(&root.join("missing"), exe), None);
+
+        // Best-effort cleanup of the scratch dir; a leftover is harmless.
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn zip_entry_path_blocks_escapes() {
+        let dest = std::env::temp_dir().join("mlbv-test-zip");
+        assert_eq!(
+            zip_entry_path(&dest, "linux/x86_64/lib.so"),
+            Some(dest.join("linux").join("x86_64").join("lib.so"))
+        );
+        // Only portable cases: backslash and drive-letter handling differs
+        // between Windows and Unix, but these three are rejected everywhere.
+        for evil in ["../evil.dll", "a/../../evil.dll", "/abs/evil.dll"] {
+            assert_eq!(zip_entry_path(&dest, evil), None, "{evil:?} must not escape");
+        }
+    }
 }

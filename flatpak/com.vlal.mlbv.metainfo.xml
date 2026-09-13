@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component type="desktop-application">
+  <id>com.vlal.mlbv</id>
+  <metadata_license>CC0-1.0</metadata_license>
+  <name>MLBV</name>
+  <summary>Minecraft launcher with LiquidBounce support</summary>
+  <description>
+    <p>Minecraft Launcher by vlalikoffc: vanilla and modded Minecraft plus LiquidBounce, Microsoft and offline accounts, per-instance settings.</p>
+  </description>
+  <launchable type="desktop-id">com.vlal.mlbv.desktop</launchable>
+</component>

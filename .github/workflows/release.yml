@@ -1,0 +1,204 @@
+name: Release
+
+# Tag-driven publishing: push a version tag and this builds every installer
+# and attaches it to the GitHub release — the in-app updater reads that
+# release, so both Windows installers (.exe for silent update, .msi as the
+# guided alternative) must always be there. Flatpak is best-effort: if its
+# job fails, the release still ships without it.
+#
+# Dry run without publishing: Actions → Release → Run workflow (dry_run on).
+# The binaries land in the run's artifacts instead of a release.
+on:
+  push:
+    tags: ['v*', 'beta*', 'release*', 'pre-release*']
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Build everything but do not publish a release'
+        type: boolean
+        default: true
+
+permissions:
+  contents: write
+
+jobs:
+  # ── Windows: NSIS .exe + WiX .msi ──────────────────────────────────────────
+  windows:
+    name: Release (Windows installers)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Build installers
+        run: npm run tauri build -- --bundles nsis,msi
+
+      - name: Upload installers
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlbv-windows
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/msi/*.msi
+          if-no-files-found: error
+
+  # ── Linux: .deb + .rpm + AppImage ───────────────────────────────────────────
+  linux:
+    name: Release (Linux packages)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: npm ci
+        run: npm ci
+
+      - name: Build packages
+        run: npm run tauri build -- --bundles deb,rpm,appimage
+
+      - name: Upload packages
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlbv-linux
+          path: |
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/rpm/*.rpm
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: error
+
+  # ── Linux: Flatpak bundle (prebuilt binary + GNOME runtime) ─────────────────
+  flatpak:
+    name: Release (Flatpak bundle)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Tauri system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            pkg-config
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      - name: npm ci and frontend build
+        run: |
+          npm ci
+          npm run build
+
+      # The frontend dist is embedded into the binary at compile time, so a
+      # plain cargo build yields a fully working standalone binary — no
+      # bundler involved. flatpak-builder only wraps it with a desktop file,
+      # icons and metadata.
+      - name: Build the release binary
+        working-directory: src-tauri
+        run: cargo build --release --locked
+
+      - name: Stage flatpak files
+        run: |
+          mkdir -p flatpak/staging mlbv-flatpak
+          cp src-tauri/target/release/mlbv flatpak/staging/mlbv
+          cp src-tauri/icons/32x32.png flatpak/staging/icon-32.png
+          cp src-tauri/icons/128x128.png flatpak/staging/icon-128.png
+          cp src-tauri/icons/128x128@2x.png flatpak/staging/icon-256.png
+
+      - name: Install flatpak toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y flatpak flatpak-builder
+          flatpak remote-add --user --if-not-exists flathub https://dl.flathub.org/repo/flathub.flatpakrepo
+          flatpak install -y --user flathub org.gnome.Platform//47 org.gnome.Sdk//47
+
+      - name: Build the bundle
+        run: |
+          flatpak-builder --force-clean --repo=flatpak/repo flatpak/build-dir flatpak/com.vlal.mlbv.yml
+          flatpak build-bundle flatpak/repo "mlbv-flatpak/MLBV_${GITHUB_REF_NAME//\//-}_x86_64.flatpak" com.vlal.mlbv
+
+      # Same convention as the .deb smoke test: timeout kills a healthy app
+      # (exit 124); anything else means it crashed on startup.
+      - name: Smoke-run the bundle
+        run: |
+          flatpak install -y --user mlbv-flatpak/*.flatpak
+          set +e
+          timeout 60 xvfb-run -a dbus-run-session -- flatpak run com.vlal.mlbv
+          code=$?
+          set -e
+          if [ $code -eq 124 ]; then echo "App stayed alive under flatpak"; else echo "flatpak run exited with $code"; exit 1; fi
+
+      - name: Upload bundle
+        uses: actions/upload-artifact@v4
+        with:
+          name: mlbv-flatpak
+          path: mlbv-flatpak/*.flatpak
+          if-no-files-found: error
+
+  # ── Attach everything to the tag's GitHub release ───────────────────────────
+  publish:
+    name: Publish GitHub release
+    runs-on: ubuntu-latest
+    needs: [windows, linux, flatpak]
+    if: github.ref_type == 'tag' && inputs.dry_run != true && needs.windows.result == 'success' && needs.linux.result == 'success'
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist-artifacts
+
+      - uses: softprops/action-gh-release@v2
+        with:
+          prerelease: ${{ startsWith(github.ref_name, 'beta') || startsWith(github.ref_name, 'pre-release') }}
+          generate_release_notes: true
+          fail_on_unmatched_files: false
+          files: |
+            dist-artifacts/mlbv-windows/**/*
+            dist-artifacts/mlbv-linux/**/*
+            dist-artifacts/mlbv-flatpak/**/*

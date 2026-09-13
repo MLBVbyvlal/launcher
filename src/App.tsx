@@ -7,6 +7,7 @@ import lbLogo from './assets/lb-logo.svg'
 import lbBadgePng from './assets/lb-badge-logo.png'
 import SetupWizard from './SetupWizard'
 import LbConfigsPanel from './LbConfigsPanel'
+import ModBrowser, { ModIcon } from './ModBrowser'
 import { getLang, type Lang, useT } from './i18n'
 import './App.css'
 
@@ -18,9 +19,11 @@ type LBVersion = { tag: string; mcVersion: string; date: string; buildId?: numbe
 type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number; loader?: 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'; loaderVersion?: string }
 type VFilter    = 'release' | 'snapshot' | 'old' | 'all'
 type LoaderVersionInfo = { version: string; stable: boolean; latest: boolean }
+type ModRow = { filename: string; enabled: boolean; size: number; source: string; project_id: string; name: string; author: string; version_id: string; version_number: string; icon_url: string }
+type ModUpdateInfo = { filename: string; name: string; current: string; latest: string; version_id: string; file_name: string; download_url: string; size: number; source: string; project_id: string; author: string; icon_url: string }
 type AppState   = 'loading' | 'ready' | 'error'
 type Tab        = 'mc' | 'lb'
-type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string; assetUrl: string; unstableWarning?: boolean }
+type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string; assetUrl: string; msiUrl: string; unstableWarning?: boolean }
 
 const spring = { type: 'spring', stiffness: 400, damping: 30 } as const
 
@@ -193,9 +196,15 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   const [consoleEnabled, setConsoleEnabled] = useState(() => localStorage.getItem('mlbv_console_enabled') === '1')
   const [javaInstalls, setJavaInstalls]     = useState<{ major: number; path: string }[]>([])
   const [dangerOpen, setDangerOpen]         = useState(false)
+  const [cfKey, setCfKey]                     = useState(() => localStorage.getItem('mlbv_cf_key') ?? '')
   const [countdown, setCountdown]           = useState(5)
   const [deleting, setDeleting]             = useState(false)
   const [updateStatus, setUpdateStatus]     = useState<'idle' | 'checking' | 'uptodate' | { version: string; htmlUrl: string } | { error: string }>('idle')
+  // The self-updater is Windows-only (NSIS/MSI); its UI is hidden elsewhere.
+  const [osName, setOsName] = useState('')
+  useEffect(() => {
+    if (isTauri) invoke<Record<string, unknown>>('get_debug_info').then(d => setOsName(String(d.os ?? ''))).catch(() => {})
+  }, [])
 
   // Customization
   const [customAccent, setCustomAccent] = useState(() => localStorage.getItem('mlbv_accent') ?? DEFAULT_ACCENT)
@@ -401,6 +410,13 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
                       </button>
                     </div>
                   </div>
+                  <div className="setting-group">
+                    <div className="setting-label">{t('settings.cf_key')}</div>
+                    <input className="glass-input" type="password" autoComplete="off" spellCheck={false}
+                      placeholder={t('settings.cf_key_ph')} value={cfKey}
+                      onChange={e => { setCfKey(e.target.value); localStorage.setItem('mlbv_cf_key', e.target.value) }} />
+                    <div className="setting-hint">{t('settings.cf_key_hint')}</div>
+                  </div>
                 </>}
 
                 {/* ── PERFORMANCE ── */}
@@ -495,10 +511,12 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
                       <span className="about-stack">{t('settings.stack')}</span>
                     </div>
                     <div className="about-update-row">
+                      {osName !== 'linux' && osName !== 'darwin' && (
                       <button className="btn-secondary" onClick={handleManualUpdateCheck}
                         disabled={updateStatus === 'checking'}>
                         {updateStatus === 'checking' ? t('settings.checking') : t('settings.check_updates')}
                       </button>
+                      )}
                       {updateStatus === 'uptodate' && (
                         <span className="about-update-ok">{t('settings.up_to_date')}</span>
                       )}
@@ -1238,9 +1256,104 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
   const [logBusy, setLogBusy] = useState(false)
 
   // Mods
-  const [mods, setMods] = useState<{ filename: string }[]>([])
+  const [mods, setMods] = useState<ModRow[]>([])
   const [selectedMods, setSelectedMods] = useState<Set<string>>(new Set())
   const [modsLoading, setModsLoading] = useState(false)
+  const [updates, setUpdates] = useState<Record<string, ModUpdateInfo>>({})
+  const [checkingUpdates, setCheckingUpdates] = useState(false)
+  const [updating, setUpdating] = useState<string | null>(null)
+  const [showModBrowser, setShowModBrowser] = useState(false)
+
+  const refreshMods = useCallback(async () => {
+    if (!isTauri) return
+    setModsLoading(true)
+    try {
+      setMods(await invoke<ModRow[]>('list_mods', { instanceName: inst.name }))
+      setSelectedMods(new Set())
+    } catch { /* keep the old list */ }
+    setModsLoading(false)
+  }, [inst.name])
+
+  const fmtSize = (b: number) =>
+    b <= 0 ? '' : b < 1024 * 1024 ? `${(b / 1024).toFixed(0)} KB` : `${(b / (1024 * 1024)).toFixed(1)} MB`
+
+  const toggleEnabled = async (m: ModRow) => {
+    if (!isTauri) return
+    try {
+      await invoke<string>('set_mod_enabled', { instanceName: inst.name, filename: m.filename, enabled: !m.enabled })
+      await refreshMods()
+    } catch { /* */ }
+  }
+
+  const checkUpdates = async () => {
+    if (!isTauri || checkingUpdates || updating) return
+    setCheckingUpdates(true)
+    try {
+      const found = await invoke<ModUpdateInfo[]>('check_mod_updates', {
+        instanceName: inst.name,
+        mcVersion: inst.mcVersion,
+        loader: inst.loader ?? 'vanilla',
+        cfKey: localStorage.getItem('mlbv_cf_key') ?? '',
+      })
+      setUpdates(Object.fromEntries(found.map(u => [u.filename, u])))
+    } catch { /* */ }
+    setCheckingUpdates(false)
+  }
+
+  const installUpdate = async (u: ModUpdateInfo): Promise<boolean> => {
+    try {
+      await invoke<string>('install_mod_file', {
+        instanceName: inst.name,
+        downloadUrl: u.download_url,
+        fileName: u.file_name,
+        replaceExisting: u.filename !== u.file_name ? u.filename : null,
+        meta: {
+          source: u.source, project_id: u.project_id, name: u.name, author: u.author,
+          version_id: u.version_id, version_number: u.latest, icon_url: u.icon_url,
+        },
+      })
+      setUpdates(prev => { const n = { ...prev }; delete n[u.filename]; return n })
+      return true
+    } catch {
+      return false
+    }
+  }
+
+  const applyUpdate = async (u: ModUpdateInfo) => {
+    if (!isTauri || updating) return
+    setUpdating(u.filename)
+    await installUpdate(u)
+    await refreshMods()
+    setUpdating(null)
+  }
+
+  const updateAll = async () => {
+    const list = Object.values(updates)
+    if (!isTauri || updating || list.length === 0) return
+    setUpdating('all')
+    for (const u of list) await installUpdate(u)
+    await refreshMods()
+    setUpdating(null)
+  }
+
+  const exportModList = () => {
+    const lines = [
+      `# Mods — ${inst.name}`,
+      '',
+      ...mods.map(m => {
+        const label = m.name || m.filename
+        const ver = m.version_number ? ` (${m.version_number})` : ''
+        const off = m.enabled ? '' : ' [disabled]'
+        return `- ${label}${ver}${off}`
+      }),
+    ]
+    const blob = new Blob([lines.join('\n')], { type: 'text/markdown' })
+    const a = document.createElement('a')
+    a.href = URL.createObjectURL(blob)
+    a.download = `mods-${inst.name}.md`
+    a.click()
+    setTimeout(() => URL.revokeObjectURL(a.href), 5000)
+  }
 
   useEffect(() => {
     if (!isTauri) return
@@ -1248,13 +1361,8 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
   }, [inst.name])
 
   useEffect(() => {
-    if (tab !== 'mods' || !isTauri) return
-    setModsLoading(true)
-    invoke<{ filename: string }[]>('list_mods', { instanceName: inst.name })
-      .then(m => { setMods(m); setSelectedMods(new Set()) })
-      .catch(() => {})
-      .finally(() => setModsLoading(false))
-  }, [tab, inst.name])
+    if (tab === 'mods') refreshMods()
+  }, [tab, refreshMods])
 
   useEffect(() => {
     if (useCustomRam) localStorage.setItem(ramKey, String(ram))
@@ -1263,6 +1371,7 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
 
   const clampRam = (v: number) => Math.min(16384, Math.max(512, Math.round(v / 512) * 512))
   const accentVar = isLb ? 'var(--lb-accent)' : 'var(--accent)'
+  const updateCount = Object.keys(updates).length
 
   const loaderLabel = () => {
     if (inst.type === 'lb') return t('isettings.type_lb')
@@ -1285,8 +1394,7 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
         const buf = await file.arrayBuffer()
         await invoke('add_mod_file', { instanceName: inst.name, filename: file.name, data: Array.from(new Uint8Array(buf)) }).catch(() => {})
       }
-      const updated = await invoke<{ filename: string }[]>('list_mods', { instanceName: inst.name }).catch(() => [] as { filename: string }[])
-      setMods(updated)
+      await refreshMods()
     }
     input.click()
   }
@@ -1294,8 +1402,7 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
   const handleDeleteMods = async () => {
     if (selectedMods.size === 0) return
     await invoke('delete_mods', { instanceName: inst.name, filenames: Array.from(selectedMods) }).catch(() => {})
-    const updated = await invoke<{ filename: string }[]>('list_mods', { instanceName: inst.name }).catch(() => [] as { filename: string }[])
-    setMods(updated); setSelectedMods(new Set())
+    await refreshMods()
   }
 
   const toggleMod = (filename: string) => {
@@ -1358,10 +1465,19 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
             </>}
 
             {tab === 'mods' && <>
-              <div className="ist-mods-toolbar">
-                <button className="btn-secondary" onClick={() => {}} style={{ opacity: 0.5, cursor: 'not-allowed' }}>{t('isettings.mods.download')}</button>
+              <div className="ist-mods-toolbar" style={{ flexWrap: 'wrap' }}>
+                <button className="btn-secondary" onClick={() => setShowModBrowser(true)}>{t('isettings.mods.download')}</button>
                 <button className="btn-secondary" onClick={handleAddMods}>{t('isettings.mods.add_file')}</button>
                 <button className="btn-secondary" onClick={() => isTauri && invoke('open_mods_folder', { instanceName: inst.name }).catch(() => {})}>{t('isettings.mods.open_folder')}</button>
+                <button className="btn-secondary" onClick={exportModList} disabled={mods.length === 0}>{t('isettings.mods.export')}</button>
+                <button className="btn-secondary" onClick={checkUpdates} disabled={checkingUpdates || updating !== null}>
+                  {checkingUpdates ? t('isettings.mods.checking') : t('isettings.mods.check_updates')}
+                </button>
+                {updateCount > 0 && (
+                  <button className="btn-ok" onClick={updateAll} disabled={updating !== null}>
+                    {updating === 'all' ? t('isettings.mods.updating') : t('isettings.mods.update_all').replace('{0}', String(updateCount))}
+                  </button>
+                )}
                 {selectedMods.size > 0 && (
                   <button className="btn-danger-sm" onClick={handleDeleteMods}>{t('isettings.mods.delete_selected')} ({selectedMods.size})</button>
                 )}
@@ -1372,15 +1488,42 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
                 <div className="ist-mods-empty">{t('isettings.mods.empty')}</div>
               ) : (
                 <div className="ist-mods-list">
-                  {mods.map(m => (
-                    <div key={m.filename}
-                      className={`ist-mod-row${selectedMods.has(m.filename) ? (isLb ? ' lb-mod-selected' : ' mod-selected') : ''}`}
-                      onClick={() => toggleMod(m.filename)}
-                    >
-                      <div className="mod-radio" />
-                      <span className="mod-name">{m.filename}</span>
-                    </div>
-                  ))}
+                  {mods.map(m => {
+                    const u = updates[m.filename]
+                    const display = m.name || m.filename
+                    return (
+                      <div key={m.filename}
+                        className={`ist-mod-row${selectedMods.has(m.filename) ? (isLb ? ' lb-mod-selected' : ' mod-selected') : ''}`}
+                        style={{ opacity: m.enabled ? 1 : 0.55 }}
+                        onClick={() => toggleMod(m.filename)}
+                      >
+                        <div className="mod-radio" />
+                        <ModIcon url={m.icon_url} name={display} size={30} />
+                        <div style={{ flex: 1, minWidth: 0 }}>
+                          <div className="mod-name" style={{ whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{display}</div>
+                          <div style={{ fontSize: 10, color: 'var(--text-muted)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {m.version_number || m.filename}
+                            {m.source && ` · ${m.source}`}
+                            {m.size > 0 && ` · ${fmtSize(m.size)}`}
+                            {!m.enabled && ` · ${t('isettings.mods.disabled')}`}
+                            {!m.source && ` · ${t('isettings.mods.unknown')}`}
+                          </div>
+                        </div>
+                        {u && (
+                          <button className="btn-ok" style={{ padding: '4px 10px', fontSize: 11, flexShrink: 0 }}
+                            disabled={updating !== null}
+                            onClick={e => { e.stopPropagation(); applyUpdate(u) }}>
+                            {updating === u.filename ? '…' : `⬆ ${u.latest}`}
+                          </button>
+                        )}
+                        <button className="btn-secondary" style={{ padding: '4px 10px', fontSize: 11, flexShrink: 0 }}
+                          title={m.enabled ? t('isettings.mods.disable') : t('isettings.mods.enable')}
+                          onClick={e => { e.stopPropagation(); toggleEnabled(m) }}>
+                          {m.enabled ? '✓' : '○'}
+                        </button>
+                      </div>
+                    )
+                  })}
                 </div>
               )}
             </>}
@@ -1403,6 +1546,17 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
             </>}
           </div>
         </div>
+        {showModBrowser && (
+          <ModBrowser
+            instanceName={inst.name}
+            mcVersion={inst.mcVersion}
+            loader={inst.loader}
+            cfKey={localStorage.getItem('mlbv_cf_key') ?? ''}
+            installed={mods.filter(m => m.project_id).map(m => ({ filename: m.filename, source: m.source, project_id: m.project_id }))}
+            onInstalled={refreshMods}
+            onClose={() => setShowModBrowser(false)}
+          />
+        )}
       </motion.div>
     </motion.div>
   )
@@ -1467,9 +1621,16 @@ function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void 
   const [phase, setPhase] = useState<'ask' | 'downloading' | 'installing'>('ask')
   const [percent, setPercent] = useState(0)
   const [dlError, setDlError] = useState('')
+  const [format, setFormat] = useState<'exe' | 'msi'>('exe')
+  // Old hand-assembled releases may carry only one installer — offer what exists.
+  const hasExe = !!info.assetUrl
+  const hasMsi = !!info.msiUrl
+  const showChoice = hasExe && hasMsi
+  const effectiveFormat = showChoice ? format : hasExe ? 'exe' : 'msi'
 
   const handleDownload = async () => {
-    if (!isTauri || !info.assetUrl) {
+    const url = effectiveFormat === 'msi' ? info.msiUrl : info.assetUrl
+    if (!isTauri || !url) {
       invoke('open_url', { url: info.htmlUrl }).catch(() => {})
       onClose()
       return
@@ -1480,11 +1641,11 @@ function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void 
       setPercent(Math.round(e.payload.percent))
     })
     try {
-      await invoke('download_update', { url: info.assetUrl })
+      await invoke('download_update', { url })
       unlisten()
       setPhase('installing')
       await new Promise(r => setTimeout(r, 700))
-      await invoke('apply_update', { newVersion: info.version })
+      await invoke('apply_update', { newVersion: info.version, kind: effectiveFormat })
       // app.exit(0) is called in Rust; this line is a safety fallback
     } catch (e) {
       unlisten()
@@ -1526,6 +1687,25 @@ function UpdateModal({ info, onClose }: { info: UpdateInfo; onClose: () => void 
             : <p className="update-nobody">{t('update.no_notes')}</p>
           }
           {dlError && <div className="inst-error" style={{ margin: '0 18px 10px' }}>{dlError}</div>}
+          {showChoice && (
+            <div style={{ padding: '0 18px 12px', display: 'flex', flexDirection: 'column', gap: 8 }}>
+              <div className="field-label">{t('update.choose_format')}</div>
+              <label className={`reinstall-opt${format === 'exe' ? ' active' : ''}`} onClick={() => setFormat('exe')}>
+                <span className="reinstall-radio" />
+                <div>
+                  <div className="reinstall-opt-title">{t('update.format_exe')}</div>
+                  <div className="reinstall-opt-sub">{t('update.format_exe_desc')}</div>
+                </div>
+              </label>
+              <label className={`reinstall-opt${format === 'msi' ? ' active' : ''}`} onClick={() => setFormat('msi')}>
+                <span className="reinstall-radio" />
+                <div>
+                  <div className="reinstall-opt-title">{t('update.format_msi')}</div>
+                  <div className="reinstall-opt-sub">{t('update.format_msi_desc')}</div>
+                </div>
+              </label>
+            </div>
+          )}
           <div className="inst-modal-footer">
             <button className="btn-cancel" onClick={onClose}>{t('update.later')}</button>
             <button className="btn-ok" onClick={handleDownload}>{t('update.download')}</button>
@@ -1774,13 +1954,20 @@ export default function App() {
     invoke<string>('get_just_updated')
       .then(ver => { if (ver) { setJustUpdated(ver); setTimeout(() => setJustUpdated(null), 5000) } })
       .catch(() => {})
-    type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string; unstable_warning: boolean }
-    invoke<RawRelease | null>('check_for_update')
-      .then(r => {
-        setUpdateCheckError(null)
-        if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, unstableWarning: r.unstable_warning })
-      })
-      .catch(e => setUpdateCheckError(String(e)))
+    type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string; msi_url: string; unstable_warning: boolean }
+    const checkForUpdate = () => {
+      invoke<RawRelease | null>('check_for_update')
+        .then(r => {
+          setUpdateCheckError(null)
+          if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, msiUrl: r.msi_url, unstableWarning: r.unstable_warning })
+        })
+        .catch(e => setUpdateCheckError(String(e)))
+    }
+    // The self-updater is Windows-only (NSIS/MSI); on other systems there is
+    // nothing to check for, so skip quietly instead of showing an error.
+    invoke<Record<string, unknown>>('get_debug_info')
+      .then(d => { if (d.os === 'windows') checkForUpdate() })
+      .catch(() => checkForUpdate())
   }, [appState])
 
   // ── Accounts ─────────────────────────────────────────────────────────────
