@@ -202,7 +202,11 @@ npm run build                           # tsc + vite → dist/
 
 cd src-tauri
 cargo check --locked --all-targets       # compile the backend
-cargo test --locked                      # run the test suite
+cargo test --locked                      # run the test suite (headless_launch stays ignored)
+
+# Headless launch proof: boots a real Minecraft client in CI (needs network
+# + display, so it never runs in the normal suite — trigger it by hand)
+gh workflow run launch-proof.yml
 ```
 
 Full installer build (Windows only, slow):
