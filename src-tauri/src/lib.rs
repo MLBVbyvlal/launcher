@@ -485,6 +485,11 @@ fn parse_semver(v: &str) -> (u64, u64, u64) {
 
 #[tauri::command]
 async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
+    // The updater ships an NSIS .exe and runs it with /S /D= — Windows-only
+    // by design. The frontend skips the check elsewhere; this is the backstop.
+    if !cfg!(windows) {
+        return Err("Self-update is only supported on Windows.".to_string());
+    }
     let current = env!("CARGO_PKG_VERSION");
     let client = reqwest::Client::builder()
         .user_agent("MLBV/1.0")
@@ -559,6 +564,9 @@ fn update_host_allowed(url: &str) -> bool {
 
 #[tauri::command]
 async fn download_update(app: tauri::AppHandle, url: String) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err("Self-update is only supported on Windows.".to_string());
+    }
     if !update_host_allowed(&url) {
         return Err(format!("Refusing to download update from untrusted host: {url}"));
     }
@@ -596,6 +604,9 @@ async fn download_update(app: tauri::AppHandle, url: String) -> Result<(), Strin
 // Run the downloaded installer with the real install path, then exit
 #[tauri::command]
 fn apply_update(app: tauri::AppHandle, new_version: String) -> Result<(), String> {
+    if !cfg!(windows) {
+        return Err("Self-update is only supported on Windows.".to_string());
+    }
     let tmp_path = std::env::temp_dir().join("mlbv-update.exe");
     if !tmp_path.exists() {
         return Err("Update installer not found".to_string());

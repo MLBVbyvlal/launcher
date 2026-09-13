@@ -196,6 +196,11 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   const [countdown, setCountdown]           = useState(5)
   const [deleting, setDeleting]             = useState(false)
   const [updateStatus, setUpdateStatus]     = useState<'idle' | 'checking' | 'uptodate' | { version: string; htmlUrl: string } | { error: string }>('idle')
+  // The self-updater is Windows-only (NSIS); its UI is hidden elsewhere.
+  const [osName, setOsName] = useState('')
+  useEffect(() => {
+    if (isTauri) invoke<Record<string, unknown>>('get_debug_info').then(d => setOsName(String(d.os ?? ''))).catch(() => {})
+  }, [])
 
   // Customization
   const [customAccent, setCustomAccent] = useState(() => localStorage.getItem('mlbv_accent') ?? DEFAULT_ACCENT)
@@ -495,10 +500,12 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
                       <span className="about-stack">{t('settings.stack')}</span>
                     </div>
                     <div className="about-update-row">
+                      {osName !== 'linux' && osName !== 'darwin' && (
                       <button className="btn-secondary" onClick={handleManualUpdateCheck}
                         disabled={updateStatus === 'checking'}>
                         {updateStatus === 'checking' ? t('settings.checking') : t('settings.check_updates')}
                       </button>
+                      )}
                       {updateStatus === 'uptodate' && (
                         <span className="about-update-ok">{t('settings.up_to_date')}</span>
                       )}
@@ -1775,12 +1782,19 @@ export default function App() {
       .then(ver => { if (ver) { setJustUpdated(ver); setTimeout(() => setJustUpdated(null), 5000) } })
       .catch(() => {})
     type RawRelease = { version: string; tag_name: string; body: string; html_url: string; asset_url: string; unstable_warning: boolean }
-    invoke<RawRelease | null>('check_for_update')
-      .then(r => {
-        setUpdateCheckError(null)
-        if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, unstableWarning: r.unstable_warning })
-      })
-      .catch(e => setUpdateCheckError(String(e)))
+    const checkForUpdate = () => {
+      invoke<RawRelease | null>('check_for_update')
+        .then(r => {
+          setUpdateCheckError(null)
+          if (r) setUpdateInfo({ version: r.version, tagName: r.tag_name, body: r.body, htmlUrl: r.html_url, assetUrl: r.asset_url, unstableWarning: r.unstable_warning })
+        })
+        .catch(e => setUpdateCheckError(String(e)))
+    }
+    // The self-updater is Windows-only (NSIS); on other systems there is
+    // nothing to check for, so skip quietly instead of showing an error.
+    invoke<Record<string, unknown>>('get_debug_info')
+      .then(d => { if (d.os === 'windows') checkForUpdate() })
+      .catch(() => checkForUpdate())
   }, [appState])
 
   // ── Accounts ─────────────────────────────────────────────────────────────

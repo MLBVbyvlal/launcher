@@ -2024,6 +2024,26 @@ fn find_java(root: &PathBuf, req: Option<&JavaVersionReq>) -> Option<PathBuf> {
         }
     }
 
+    // 4b. Same for Linux: distro packages live in /usr/lib/jvm, manual
+    // installs usually land in /usr/java or /opt.
+    #[cfg(target_os = "linux")]
+    {
+        let bases = ["/usr/lib/jvm", "/usr/java", "/opt", "/opt/java"];
+        for base in &bases {
+            if let Ok(rd) = std::fs::read_dir(base) {
+                let mut dirs: Vec<_> = rd.flatten()
+                    .filter(|e| e.file_type().map(|t| t.is_dir()).unwrap_or(false))
+                    .collect();
+                dirs.sort_by_key(|e| folder_java_major(&e.file_name().to_string_lossy()).unwrap_or(0));
+                for entry in dirs.iter() {
+                    let ver = folder_java_major(&entry.file_name().to_string_lossy());
+                    let p = entry.path().join("bin").join(exe);
+                    if p.exists() && ver_compat(ver) { return Some(p); }
+                }
+            }
+        }
+    }
+
     // 5. PATH fallback (any version if no requirement)
     if req_major.is_none()
         && std::process::Command::new(exe).arg("-version").output().is_ok()
@@ -2286,6 +2306,26 @@ pub fn scan_java_installs() -> Vec<(u32, String)> {
             "C:\\Program Files\\Java",
             "C:\\Program Files (x86)\\Java",
         ];
+        for base in &bases {
+            if let Ok(rd) = std::fs::read_dir(base) {
+                for entry in rd.flatten() {
+                    if !entry.file_type().map(|t| t.is_dir()).unwrap_or(false) { continue; }
+                    let name = entry.file_name().to_string_lossy().to_string();
+                    if let Some(major) = folder_java_major(&name) {
+                        let p = entry.path().join("bin").join(exe);
+                        if p.exists() && !found.iter().any(|(v, _)| *v == major) {
+                            found.push((major, entry.path().to_string_lossy().into_owned()));
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Same for Linux system installs.
+    #[cfg(target_os = "linux")]
+    {
+        let bases = ["/usr/lib/jvm", "/usr/java", "/opt", "/opt/java"];
         for base in &bases {
             if let Ok(rd) = std::fs::read_dir(base) {
                 for entry in rd.flatten() {
