@@ -276,7 +276,8 @@ not accidentally "re-fixed" into a regression.
    (`rename_instance_data`, `lib.rs`). Residual: recovery without a metadata file is a filesystem
    guess (LB instances lose `buildId`).
 3. **FIXED 2026-09-12 — instance name validation.** `launcher::valid_instance_name` (whitelist:
-   ASCII alnum + space `_- . +`, length 1–64, no leading dot, no Windows device names) is called at
+   ASCII alnum + space `_- . +`, length 1–64, no leading dot, no Windows device names even
+   with an extension) is called at
    the entry of every command that takes `instance_name` (`lib.rs`). Do not move it to the UI.
 4. **FIXED 2026-09-12 — verified streaming downloads.** `download_file` (`launcher.rs`) streams
    to a `.part` file, checks size + SHA-1 (when the manifest has one) and renames on success.

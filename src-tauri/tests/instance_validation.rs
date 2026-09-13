@@ -44,9 +44,13 @@ fn rejects_path_escapes() {
 fn rejects_windows_device_names() {
     for name in [
         "CON", "con", "Con", "PRN", "AUX", "NUL", "COM1", "com9", "LPT1", "lpt4",
+        // Windows reserves device names with any extension too.
+        "CON.txt", "nul.dat", "com1.save",
     ] {
         assert!(valid_instance_name(name).is_err(), "{name:?} should be rejected");
     }
+    // ...but a device name after the first dot is a harmless stem.
+    assert!(valid_instance_name("my.com1").is_ok());
 }
 
 #[test]

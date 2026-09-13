@@ -225,14 +225,16 @@ pub fn valid_instance_name(name: &str) -> Result<()> {
     if name.starts_with('.') || name == "." || name == ".." || name.ends_with('.') || name.ends_with(' ') {
         return Err(anyhow!("Invalid instance name (bad start/end character)"));
     }
-    // Windows reserved device names are reserved as the final path component.
+    // Windows reserves device names with any extension ("CON.txt" is still
+    // CON), so the stem before the first dot is what matters.
     let base = name.trim_end_matches(['.', ' ']).to_ascii_uppercase();
+    let stem = base.split('.').next().unwrap_or(base.as_str());
     const RESERVED: [&str; 17] = [
         "CON", "PRN", "AUX", "NUL",
         "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8", "COM9",
         "LPT1", "LPT2", "LPT3", "LPT4",
     ];
-    if RESERVED.contains(&base.as_str()) {
+    if RESERVED.contains(&stem) {
         return Err(anyhow!("Invalid instance name (Windows reserved name)"));
     }
     Ok(())
