@@ -22,9 +22,21 @@ fn log_tail(log: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
-#[tokio::test]
+#[test]
 #[ignore]
-async fn vanilla_client_boots_headless() {
+fn vanilla_client_boots_headless() {
+    // No tokio macros in the dependency tree: the "macros" feature would pull
+    // in tokio-macros and force a Cargo.lock update, so drive the async body
+    // with an explicitly built current-thread runtime instead. Everything the
+    // pipeline needs (spawn, sleep, blocking threads) works on it.
+    tokio::runtime::Builder::new_current_thread()
+        .enable_all()
+        .build()
+        .expect("tokio runtime")
+        .block_on(proof_body());
+}
+
+async fn proof_body() {
     let mc_version =
         std::env::var("MLBV_PROOF_MC_VERSION").unwrap_or_else(|_| MC_VERSION.to_string());
 

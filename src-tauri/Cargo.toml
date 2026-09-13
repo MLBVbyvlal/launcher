@@ -33,9 +33,3 @@ zip = "0.6"
 # client JARs, libraries and assets after download.
 sha1 = "0.10"
 
-[dev-dependencies]
-# Test-only tokio features for the headless launch proof (the async test
-# macro + a multithreaded runtime). Same crate and version as above, so the
-# app binary is unaffected and Cargo.lock needs no changes.
-tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
-
