@@ -8,24 +8,53 @@ import lbBadgePng from './assets/lb-badge-logo.png'
 import SetupWizard from './SetupWizard'
 import LbConfigsPanel from './LbConfigsPanel'
 import ModBrowser, { ModIcon } from './ModBrowser'
+import ConsolePanel from './ConsolePanel'
+import MigrationScreen, { type MigrationScanT, type PinPreview } from './MigrationScreen'
 import { getLang, type Lang, useT } from './i18n'
 import './App.css'
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
 type Account   = { type: 'offline' | 'microsoft'; username: string; uuid: string; accessToken?: string; refreshToken?: string; tokenAt?: number }
-type MCVersion = { id: string; type: 'release' | 'snapshot' | 'old_alpha' | 'old_beta'; releaseTime: string }
+export type MCVersion = { id: string; type: 'release' | 'snapshot' | 'old_alpha' | 'old_beta'; releaseTime: string }
 type LBVersion = { tag: string; mcVersion: string; date: string; buildId?: number }
-type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number; loader?: 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'; loaderVersion?: string }
+export type Instance  = { id: string; name: string; type: 'mc' | 'lb'; version: string; mcVersion: string; buildId?: number; loader?: 'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'; loaderVersion?: string }
 type VFilter    = 'release' | 'snapshot' | 'old' | 'all'
 type LoaderVersionInfo = { version: string; stable: boolean; latest: boolean }
 type ModRow = { filename: string; enabled: boolean; size: number; source: string; project_id: string; name: string; author: string; version_id: string; version_number: string; icon_url: string }
 type ModUpdateInfo = { filename: string; name: string; current: string; latest: string; version_id: string; file_name: string; download_url: string; size: number; source: string; project_id: string; author: string; icon_url: string }
-type AppState   = 'loading' | 'ready' | 'error'
+type AppState   = 'loading' | 'migrate' | 'ready' | 'error'
 type Tab        = 'mc' | 'lb'
 type UpdateInfo = { version: string; tagName: string; body: string; htmlUrl: string; assetUrl: string; msiUrl: string; unstableWarning?: boolean }
 
 const spring = { type: 'spring', stiffness: 400, damping: 30 } as const
+
+// Data written before 0.0.5 (marker missing or older) must go through the
+// one-time migration screen: shared natives cleanup + latest pinning.
+const isLegacyDataVersion = (v: string): boolean => {
+  const p = v.trim().split('.').map(x => { const n = parseInt(x, 10); return isNaN(n) ? 0 : n })
+  const target = [0, 0, 5]
+  for (let i = 0; i < 3; i++) {
+    const a = p[i] ?? 0
+    if (a !== target[i]) return a < target[i]
+  }
+  return false
+}
+
+const buildPinPreviews = (list: Instance[], mf: MCVersion[]): PinPreview[] => {
+  const ids = new Set(mf.map(v => v.id))
+  return list.filter(i => i.version === 'latest').map(i => {
+    if (i.type === 'mc') {
+      const hint = i.mcVersion
+      const lastKnown = localStorage.getItem('mlbv_last_mc_latest') ?? ''
+      const to = (hint && hint !== 'latest' && ids.has(hint)) ? hint
+        : (lastKnown && ids.has(lastKnown)) ? lastKnown
+        : (mf.find(v => v.type === 'release')?.id ?? '?')
+      return { id: i.id, name: i.name, to }
+    }
+    return { id: i.id, name: i.name, to: localStorage.getItem('mlbv_last_lb_latest') ?? '' }
+  })
+}
 
 function LbBadge({ size = 20 }: { size?: number }) {
   return (
@@ -192,6 +221,10 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   const [ramDraft, setRamDraft]             = useState<string | null>(null)
   const [concurrent, setConcurrent]         = useState(() => { const s = localStorage.getItem('mlbv_concurrent'); return s ? Number(s) : 5 })
   const [concurrentDraft, setConcurrentDraft] = useState<string | null>(null)
+  const [minRam, setMinRam]       = useState(() => { const s = localStorage.getItem('mlbv_min_ram'); return s ? Number(s) : 512 })
+  const [minRamDraft, setMinRamDraft] = useState<string | null>(null)
+  const [javaPath, setJavaPath]   = useState(() => localStorage.getItem('mlbv_java_path') ?? '')
+  const [jvmArgs, setJvmArgs]     = useState(() => localStorage.getItem('mlbv_jvm_args') ?? '')
   const [closeOnLaunch, setCloseOnLaunch]   = useState(() => localStorage.getItem('mlbv_close_on_launch') === '1')
   const [consoleEnabled, setConsoleEnabled] = useState(() => localStorage.getItem('mlbv_console_enabled') === '1')
   const [javaInstalls, setJavaInstalls]     = useState<{ major: number; path: string }[]>([])
@@ -243,6 +276,9 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   }, [])
 
   useEffect(() => { localStorage.setItem('mlbv_ram', String(ram)) }, [ram])
+  useEffect(() => { localStorage.setItem('mlbv_min_ram', String(minRam)) }, [minRam])
+  useEffect(() => { localStorage.setItem('mlbv_java_path', javaPath) }, [javaPath])
+  useEffect(() => { localStorage.setItem('mlbv_jvm_args', jvmArgs) }, [jvmArgs])
   useEffect(() => { localStorage.setItem('mlbv_concurrent', String(concurrent)) }, [concurrent])
   useEffect(() => { localStorage.setItem('mlbv_close_on_launch', closeOnLaunch ? '1' : '0') }, [closeOnLaunch])
   useEffect(() => { localStorage.setItem('mlbv_console_enabled', consoleEnabled ? '1' : '0') }, [consoleEnabled])
@@ -254,8 +290,10 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   }, [dangerOpen, countdown])
 
   const clampRam        = (v: number) => Math.min(16384, Math.max(512, Math.round(v / 512) * 512))
+  const clampMinRam     = (v: number) => Math.min(8192, Math.max(256, Math.round(v / 256) * 256))
   const clampConcurrent = (v: number) => Math.min(50, Math.max(1, Math.round(v)))
   const commitRam        = (raw: string) => { const n = Number(raw); if (!isNaN(n) && n > 0) setRam(clampRam(n)); setRamDraft(null) }
+  const commitMinRam     = (raw: string) => { const n = Number(raw); if (!isNaN(n) && n > 0) setMinRam(clampMinRam(n)); setMinRamDraft(null) }
   const commitConcurrent = (raw: string) => { const n = Number(raw); if (!isNaN(n) && n > 0) setConcurrent(clampConcurrent(n)); setConcurrentDraft(null) }
 
   const concurrentWarning = concurrent < 5
@@ -447,6 +485,23 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
                   </div>
                   <div className="setting-group">
                     <div className="setting-label-row">
+                      <div className="setting-label">{t('settings.min_ram')} — {minRam >= 1024 ? `${(minRam/1024).toFixed(1)} GB` : `${minRam} MB`}</div>
+                      <Tip text={t('settings.tip.ram')} />
+                    </div>
+                    <div className="ram-row">
+                      <div className="ram-slider-wrap">
+                        <input type="range" className="glass-range" min={256} max={8192} step={256}
+                          value={Math.min(minRam, 8192)} onChange={e => { setMinRam(Number(e.target.value)); setMinRamDraft(null) }} />
+                      </div>
+                      <input type="number" className="ram-input" min={256} max={8192}
+                        value={minRamDraft ?? minRam}
+                        onChange={e => setMinRamDraft(e.target.value)}
+                        onBlur={e => commitMinRam(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+                    </div>
+                  </div>
+                  <div className="setting-group">
+                    <div className="setting-label-row">
                       <div className="setting-label">{t('settings.concurrent')} — {concurrent}</div>
                       <Tip text={t('settings.tip.concurrent')} />
                     </div>
@@ -488,6 +543,22 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
                       })}
                     </div>
                     <div className="setting-hint">{t('settings.java_hint')}</div>
+                  </div>
+                  <div className="setting-group">
+                    <div className="setting-label-row">
+                      <div className="setting-label">{t('settings.java_path')}</div>
+                      <Tip text={t('settings.java_path_hint')} />
+                    </div>
+                    <input type="text" className="lb-input" placeholder={t('settings.java_path_ph')}
+                      value={javaPath} onChange={e => setJavaPath(e.target.value)} spellCheck={false} />
+                  </div>
+                  <div className="setting-group">
+                    <div className="setting-label-row">
+                      <div className="setting-label">{t('settings.jvm_args')}</div>
+                      <Tip text={t('settings.jvm_args_hint')} />
+                    </div>
+                    <input type="text" className="lb-input" placeholder={t('settings.jvm_args_ph')}
+                      value={jvmArgs} onChange={e => setJvmArgs(e.target.value)} spellCheck={false} />
                   </div>
                 </>}
 
@@ -654,6 +725,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   const [selectedLoader, setSelectedLoader] = useState<'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'>('vanilla')
   const [loaderVersions, setLoaderVersions] = useState<LoaderVersionInfo[]>([])
   const [loaderVerLoading, setLoaderVerLoading] = useState(false)
+  const [loaderVerError, setLoaderVerError] = useState('')
   const [selectedLoaderVer, setSelectedLoaderVer] = useState<string>('')
   const [loaderShowAll, setLoaderShowAll] = useState(false)
   const [unstableWarn, setUnstableWarn]       = useState(false)
@@ -721,14 +793,13 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   // Reset step when switching to LB type
   useEffect(() => { if (instType === 'lb') setStep(1) }, [instType])
 
-  // Auto-pick first real version when type/branch changes (skip "latest")
+  // Auto-pick first version when type/branch changes
   useEffect(() => {
     if (instType === 'mc') {
       const filtered = mcVersions.filter(v => v.type === 'release')
       setSelVer(filtered[0]?.id ?? '')
     } else {
-      const real = lbVersionsMap[lbBranch]?.find(v => v.tag !== 'latest')
-      setSelVer(real?.tag ?? lbVersionsMap[lbBranch]?.[0]?.tag ?? '')
+      setSelVer(lbVersionsMap[lbBranch]?.[0]?.tag ?? '')
     }
     setNameEdited(false)
     setError('')
@@ -755,11 +826,23 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
     if (vFilter === 'snapshot') return v.type === 'snapshot'
     return v.type === 'old_beta' || v.type === 'old_alpha'
   })
-  // Prepend "Latest" pseudo-entry for release/all filters
-  const latestMcEntry: MCVersion = { id: 'latest', type: 'release', releaseTime: new Date().toISOString() }
-  const filteredMc = (vFilter === 'release' || vFilter === 'all')
-    ? [latestMcEntry, ...filteredMcBase]
-    : filteredMcBase
+  // Rolling "Latest" versions were removed in 0.0.5: every instance pins the
+  // exact version picked here (legacy latest-instances convert on migration).
+  const filteredMc = filteredMcBase
+
+  const fetchLoaderVers = (mcId: string) => {
+    if (!isTauri) return
+    setLoaderVerLoading(true)
+    setLoaderVerError('')
+    invoke<LoaderVersionInfo[]>('get_loader_versions', { mcVer: mcId, loader: selectedLoader })
+      .then(vs => {
+        setLoaderVersions(vs)
+        const first = vs.find(v => v.stable) ?? vs[0]
+        if (first) setSelectedLoaderVer(first.version)
+      })
+      .catch((e) => setLoaderVerError(String(e)))
+      .finally(() => setLoaderVerLoading(false))
+  }
 
   const handleCreate = () => {
     const finalName = displayName.trim()
@@ -770,20 +853,19 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
       setTimeout(() => setShake(false), 500)
       return
     }
-    const lbBuild = currentLbVersions.find(v => v.tag === selVer && v.tag !== 'latest')
-    // For "latest" MC: store current latest as mcVersion hint, but keep version='latest'
+    const lbBuild = currentLbVersions.find(v => v.tag === selVer)
     const mcVerHint = instType === 'mc'
-      ? (selVer === 'latest' ? (filteredMcBase[0]?.id ?? 'latest') : selVer)
-      : (lbBuild?.mcVersion ?? (currentLbVersions.find(v => v.tag !== 'latest')?.mcVersion ?? selVer))
+      ? selVer
+      : (lbBuild?.mcVersion ?? currentLbVersions[0]?.mcVersion ?? selVer)
     onAdd({
       id: crypto.randomUUID(),
       name: finalName,
       type: instType,
       version: selVer,
       mcVersion: mcVerHint,
-      buildId: selVer === 'latest' ? undefined : lbBuild?.buildId,
+      buildId: lbBuild?.buildId,
       loader: instType === 'mc' ? selectedLoader : undefined,
-      loaderVersion: (instType === 'mc' && selectedLoader !== 'vanilla' && selVer !== 'latest') ? selectedLoaderVer : undefined,
+      loaderVersion: (instType === 'mc' && selectedLoader !== 'vanilla') ? (selectedLoaderVer || undefined) : undefined,
     })
     onClose()
   }
@@ -821,15 +903,15 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
             <div className="vlist">
               {filteredMc.map(v => (
                 <motion.button key={v.id}
-                  className={`vitem${v.id === selVer ? ' picked' : ''}${v.id === 'latest' ? ' latest-item' : ''}`}
+                  className={`vitem${v.id === selVer ? ' picked' : ''}`}
                   onClick={() => { setSelVer(v.id); setNameEdited(false) }}
                   whileHover={{ x: 3 }} transition={spring}
                 >
-                  <span className={`vbadge ${v.id === 'latest' ? 'latest' : v.type}`}>
-                    {v.id === 'latest' ? '★' : verTag(v.type)}
+                  <span className={`vbadge ${v.type}`}>
+                    {verTag(v.type)}
                   </span>
-                  <span className="vid">{v.id === 'latest' ? 'Latest' : v.id}</span>
-                  {v.id !== 'latest' && <span className="vyr">{new Date(v.releaseTime).getFullYear()}</span>}
+                  <span className="vid">{v.id}</span>
+                  <span className="vyr">{new Date(v.releaseTime).getFullYear()}</span>
                   {v.id === selVer && <span className="vcheck">✓</span>}
                 </motion.button>
               ))}
@@ -841,9 +923,9 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
               {([
                 { id: 'vanilla',  icon: '🌿', label: t('inst.loader.vanilla'),  desc: t('inst.loader.vanilla_desc') },
                 { id: 'fabric',   icon: '🧵', label: t('inst.loader.fabric'),   desc: t('inst.loader.fabric_desc') },
-                { id: 'quilt',    icon: '🪡', label: 'Quilt',    desc: 'Quilt mod loader' },
-                { id: 'forge',    icon: '⚒️', label: 'Forge',    desc: 'Forge mod loader' },
-                { id: 'neoforge', icon: '🔥', label: 'NeoForge', desc: 'NeoForge mod loader' },
+                { id: 'quilt',    icon: '🪡', label: 'Quilt',    desc: t('inst.loader.quilt_desc') },
+                { id: 'forge',    icon: '⚒️', label: 'Forge',    desc: t('inst.loader.forge_desc') },
+                { id: 'neoforge', icon: '🔥', label: 'NeoForge', desc: t('inst.loader.neoforge_desc') },
               ]).map(opt => (
                 <div key={opt.id}
                   className={['loader-opt', selectedLoader === opt.id ? 'loader-selected' : ''].filter(Boolean).join(' ')}
@@ -859,7 +941,11 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
               ))}
             </div>
             <div className="loader-step-hint">
-              {selectedLoader === 'vanilla' ? t('inst.loader.vanilla_desc') : t('inst.loader.fabric_desc')}
+              {selectedLoader === 'vanilla' ? t('inst.loader.vanilla_desc')
+                : selectedLoader === 'fabric' ? t('inst.loader.fabric_desc')
+                : selectedLoader === 'quilt' ? t('inst.loader.quilt_desc')
+                : selectedLoader === 'forge' ? t('inst.loader.forge_desc')
+                : t('inst.loader.neoforge_desc')}
             </div>
           </>
           ) : (
@@ -884,6 +970,11 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
             <div className="vlist">
               {loaderVerLoading ? (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.loader.ver.loading')}</div>
+              ) : loaderVerError ? (
+                <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
+                  <div style={{ color: '#f87171', fontSize: 12 }}>{t('error.prefix')} {loaderVerError}</div>
+                  <button className="btn-retry" onClick={() => fetchLoaderVers(selVer)}>{t('error.retry')}</button>
+                </div>
               ) : loaderVersions.length === 0 ? (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.loader.ver.none')}</div>
               ) : (() => {
@@ -1015,20 +1106,15 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
               ) : currentLbVersions.length === 0 ? (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.no_versions')}</div>
               ) : (() => {
-                const lbDisplay = lbBranch === 'nextgen'
-                  ? [{ tag: 'latest', buildId: 0, mcVersion: '', date: '' } as LBVersion, ...currentLbVersions]
-                  : currentLbVersions
-                return lbDisplay.map(v => (
+                return currentLbVersions.map(v => (
                   <motion.button key={v.tag}
-                    className={`vitem${v.tag === selVer ? ' picked lb-picked' : ''}${v.tag === 'latest' ? ' latest-item' : ''}`}
+                    className={`vitem${v.tag === selVer ? ' picked lb-picked' : ''}`}
                     onClick={() => { setSelVer(v.tag); setNameEdited(false) }}
                     whileHover={{ x: 3 }} transition={spring}
                   >
-                    {v.tag === 'latest'
-                      ? <span className="vbadge latest">★</span>
-                      : <LbBadge />}
-                    <span className="vid">{v.tag === 'latest' ? 'Latest' : v.tag}</span>
-                    {v.tag !== 'latest' && <span className="vyr">MC {v.mcVersion}</span>}
+                    <LbBadge />
+                    <span className="vid">{v.tag}</span>
+                    <span className="vyr">MC {v.mcVersion}</span>
                     {v.tag === selVer && <span className="vcheck" style={{ color: 'var(--lb-accent)' }}>✓</span>}
                   </motion.button>
                 ))
@@ -1062,22 +1148,10 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
           ) : instType === 'mc' && step === 2 ? (
             <button className="btn-ok" onClick={() => {
               if (selectedLoader === 'vanilla') { handleCreate(); return }
-              // For "latest" MC with fabric/quilt: skip version picker, use latest loader
-              if (selVer === 'latest' && (selectedLoader === 'fabric' || selectedLoader === 'quilt')) {
-                setSelectedLoaderVer('')
-                handleCreate()
-                return
-              }
               setStep(3)
               setSelectedLoaderVer('')
               setLoaderVersions([])
-              if (isTauri) {
-                setLoaderVerLoading(true)
-                invoke<LoaderVersionInfo[]>('get_loader_versions', { mcVer: selVer, loader: selectedLoader })
-                  .then(vs => { setLoaderVersions(vs); const first = vs.find(v => v.stable) ?? vs[0]; if (first) setSelectedLoaderVer(first.version) })
-                  .catch(() => {})
-                  .finally(() => setLoaderVerLoading(false))
-              }
+              fetchLoaderVers(selVer)
             }}>
               {selectedLoader === 'vanilla' ? t('inst.modal.create') : t('inst.loader.next')}
             </button>
@@ -1250,6 +1324,11 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
   const globalRam = Number(localStorage.getItem('mlbv_ram') ?? '2048') || 2048
   const [useCustomRam, setUseCustomRam] = useState(() => !!localStorage.getItem(ramKey))
   const [ram, setRam] = useState(() => Number(localStorage.getItem(ramKey) ?? globalRam))
+  // Min RAM (Xms)
+  const minRamKey = `mlbv_inst_min_ram_${inst.id}`
+  const globalMinRam = Number(localStorage.getItem('mlbv_min_ram') ?? '512') || 512
+  const [useCustomMinRam, setUseCustomMinRam] = useState(() => !!localStorage.getItem(minRamKey))
+  const [minRam, setMinRam] = useState(() => Number(localStorage.getItem(minRamKey) ?? globalMinRam))
 
   // Logs
   const [logText, setLogText] = useState('')
@@ -1369,7 +1448,13 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
     else localStorage.removeItem(ramKey)
   }, [useCustomRam, ram, ramKey])
 
+  useEffect(() => {
+    if (useCustomMinRam) localStorage.setItem(minRamKey, String(minRam))
+    else localStorage.removeItem(minRamKey)
+  }, [useCustomMinRam, minRam, minRamKey])
+
   const clampRam = (v: number) => Math.min(16384, Math.max(512, Math.round(v / 512) * 512))
+  const clampMinRam = (v: number) => Math.min(8192, Math.max(256, Math.round(v / 256) * 256))
   const accentVar = isLb ? 'var(--lb-accent)' : 'var(--accent)'
   const updateCount = Object.keys(updates).length
 
@@ -1460,6 +1545,18 @@ function InstanceSettingsModal({ inst, isLb, onClose }: { inst: Instance; isLb: 
                 {useCustomRam && (
                   <input type="range" className="glass-range" min={512} max={16384} step={512}
                     value={ram} onChange={e => setRam(clampRam(Number(e.target.value)))} />
+                )}
+              </div>
+              <div className="setting-group">
+                <div className="setting-label">{t('isettings.min_ram')}</div>
+                <label className="setting-toggle">
+                  <input type="checkbox" checked={useCustomMinRam} onChange={e => setUseCustomMinRam(e.target.checked)} />
+                  <span className="toggle-track ist-toggle-track"><span className="toggle-thumb" /></span>
+                  <span className="toggle-label">{useCustomMinRam ? `${minRam >= 1024 ? `${(minRam/1024).toFixed(1)} GB` : `${minRam} MB`}` : `Global (${globalMinRam >= 1024 ? `${(globalMinRam/1024).toFixed(1)} GB` : `${globalMinRam} MB`})`}</span>
+                </label>
+                {useCustomMinRam && (
+                  <input type="range" className="glass-range" min={256} max={8192} step={256}
+                    value={Math.min(minRam, 8192)} onChange={e => setMinRam(clampMinRam(Number(e.target.value)))} />
                 )}
               </div>
             </>}
@@ -1804,6 +1901,8 @@ export default function App() {
 
   // App state
   const [appState, setAppState]     = useState<AppState>('loading')
+  const [migrateScan, setMigrateScan] = useState<MigrationScanT | null>(null)
+  const [migratePins, setMigratePins] = useState<PinPreview[]>([])
   const [loadStatus, setLoadStatus] = useState('Connecting to Mojang…')
   const [loadProgress, setLoadProg] = useState(0)
 
@@ -1868,6 +1967,9 @@ export default function App() {
   const [launchingTab, setLaunchingTab]       = useState<Tab | null>(null)
   // Instances with a live game process. Several may run at the same time.
   const [running, setRunning]                 = useState<string[]>([])
+  // Console tab overlays whichever mc/lb tab is underneath; the game keeps running.
+  const [consoleOpen, setConsoleOpen]         = useState(false)
+  const [consoleInst, setConsoleInst]         = useState<string | null>(null)
   const [stopWarn, setStopWarn]               = useState(false)
   const [stopCd, setStopCd]                   = useState(5)
   const stopCdRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -1891,11 +1993,6 @@ export default function App() {
   // Crash dialog
   const [crashInfo, setCrashInfo]             = useState<CrashInfo | null>(null)
   const lastLaunchedInst = useRef<Instance | null>(null)
-
-  // Latest version feature
-  const [newVerToast, setNewVerToast]         = useState<{ type: 'mc' | 'lb'; ver: string } | null>(null)
-  const [fetchFailModal, setFetchFailModal]   = useState<{ onContinue: () => void; onCancel: () => void } | null>(null)
-  const [loaderNotAvail, setLoaderNotAvail]   = useState<{ loader: string; mcVer: string } | null>(null)
 
   // Context menu
   const [ctxMenu, setCtxMenu]                 = useState<CtxTarget | null>(null)
@@ -1937,7 +2034,31 @@ export default function App() {
       setLoadProg(70); setLoadStatus('Parsing versions…')
       await tick(150)
       const data = await res.json()
-      setVersions(data.versions as MCVersion[])
+      const mfVersions = data.versions as MCVersion[]
+      setVersions(mfVersions)
+      // ── 0.0.5 data migration gate ──
+      // Legacy data (marker missing/older) with anything on disk or in the
+      // instance list must convert before entering. Fresh installs and
+      // post-reset states have nothing to convert: stamp the marker silently.
+      if (isTauri) {
+        try {
+          const dv = await invoke<string>('get_data_version')
+          if (isLegacyDataVersion(dv)) {
+            setLoadProg(85); setLoadStatus('Checking data version…')
+            const scan = await invoke<MigrationScanT>('migration_scan')
+            let bootInst: Instance[] = []
+            try { bootInst = JSON.parse(localStorage.getItem('mlbv_instances') ?? '[]') } catch { bootInst = [] }
+            if (bootInst.length > 0 || scan.has_instances || scan.has_versions || scan.garbage.length > 0) {
+              setMigrateScan(scan)
+              setMigratePins(buildPinPreviews(bootInst, mfVersions))
+              setLoadProg(100)
+              setAppState('migrate')
+              return
+            }
+          }
+          if (!dv) { try { await invoke('set_data_version') } catch { /* next boot retries */ } }
+        } catch { /* transport failure → fall through to ready */ }
+      }
       setLoadProg(100); setLoadStatus('Ready!')
       await tick(400); setAppState('ready')
     } catch {
@@ -2008,6 +2129,12 @@ export default function App() {
     }).catch(() => {})
   }
 
+  // Migration result: replace the instance list, re-save every metadata file.
+  const applyMigrationPins = (updated: Instance[]) => {
+    setInstances(updated)
+    updated.forEach(persistInstance)
+  }
+
   useEffect(() => {
     if (!isTauri || appState !== 'ready') return
     type Found = { name: string; instance_type: string; mc_version: string | null; loader: string | null; loader_version: string | null; build_id: number | null }
@@ -2021,8 +2148,10 @@ export default function App() {
               id: crypto.randomUUID(),
               name: f.name,
               type: (f.instance_type === 'lb' ? 'lb' : 'mc') as 'mc' | 'lb',
-              version: f.mc_version ?? 'Unknown',
-              mcVersion: f.mc_version ?? '',
+              // Rolling versions no longer exist; a stale 'latest' in old
+              // metadata surfaces as Unknown instead of breaking the launch.
+              version: (f.mc_version && f.mc_version !== 'latest') ? f.mc_version : 'Unknown',
+              mcVersion: (f.mc_version && f.mc_version !== 'latest') ? f.mc_version : '',
               loader: (f.loader && f.loader !== 'vanilla' ? f.loader : 'vanilla') as Instance['loader'],
               loaderVersion: f.loader_version ?? undefined,
               buildId: f.build_id ?? undefined,
@@ -2182,83 +2311,11 @@ export default function App() {
         const concurrentDl = Number(localStorage.getItem('mlbv_concurrent') ?? '5') || 5
         const globalRam = Number(localStorage.getItem('mlbv_ram') ?? '2048') || 2048
         const ramMb = Number(localStorage.getItem(`mlbv_inst_ram_${activeInstance.id}`) || globalRam)
+        const globalMinRam = Number(localStorage.getItem('mlbv_min_ram') ?? '512') || 512
+        const minRamMb = Number(localStorage.getItem(`mlbv_inst_min_ram_${activeInstance.id}`) || globalMinRam)
         const showConsole = localStorage.getItem('mlbv_console_enabled') === '1'
 
-        // ── Resolve "latest" version before launch ────────────────────────
         let resolvedInst = activeInstance
-        if (activeInstance.version === 'latest') {
-          setStatus('Fetching latest version…')
-
-          if (activeInstance.type === 'lb') {
-            // ─ LB Latest ─────────────────────────────────────────────────
-            try {
-              type RawBuild = { build_id: number; lb_version: string; mc_version: string }
-              const builds = await invoke<RawBuild[]>('get_lb_versions', { branch: 'nextgen' })
-              const latest = builds[0]
-              if (latest) {
-                const lastKnown = localStorage.getItem('mlbv_last_lb_latest') ?? ''
-                if (lastKnown && latest.lb_version !== lastKnown) {
-                  setNewVerToast({ type: 'lb', ver: latest.lb_version })
-                  setTimeout(() => setNewVerToast(null), 6000)
-                }
-                localStorage.setItem('mlbv_last_lb_latest', latest.lb_version)
-                localStorage.setItem('mlbv_last_lb_latest_buildid', String(latest.build_id))
-                localStorage.setItem('mlbv_last_lb_latest_mcver', latest.mc_version)
-                resolvedInst = { ...activeInstance, buildId: latest.build_id, mcVersion: latest.mc_version }
-              }
-            } catch {
-              const ok = await new Promise<boolean>(resolve => {
-                setFetchFailModal({ onContinue: () => resolve(true), onCancel: () => resolve(false) })
-              })
-              setFetchFailModal(null)
-              if (!ok) return  // finally handles cleanup
-              const lastBuildId = Number(localStorage.getItem('mlbv_last_lb_latest_buildid') ?? '0')
-              const lastMcVer   = localStorage.getItem('mlbv_last_lb_latest_mcver') ?? activeInstance.mcVersion
-              if (lastBuildId) resolvedInst = { ...activeInstance, buildId: lastBuildId, mcVersion: lastMcVer }
-            }
-
-          } else {
-            // ─ MC Latest ─────────────────────────────────────────────────
-            try {
-              const mf = await fetch('https://launchermeta.mojang.com/mc/game/version_manifest_v2.json')
-                .then(r => r.json()) as { versions: MCVersion[] }
-              const latestRelease = mf.versions.find(v => v.type === 'release')
-              if (latestRelease) {
-                const lastKnown = localStorage.getItem('mlbv_last_mc_latest') ?? ''
-                if (lastKnown && latestRelease.id !== lastKnown) {
-                  setNewVerToast({ type: 'mc', ver: latestRelease.id })
-                  setTimeout(() => setNewVerToast(null), 6000)
-                }
-                localStorage.setItem('mlbv_last_mc_latest', latestRelease.id)
-                resolvedInst = { ...activeInstance, mcVersion: latestRelease.id }
-              }
-            } catch {
-              const lastKnown = localStorage.getItem('mlbv_last_mc_latest')
-              const ok = await new Promise<boolean>(resolve => {
-                setFetchFailModal({ onContinue: () => resolve(true), onCancel: () => resolve(false) })
-              })
-              setFetchFailModal(null)
-              if (!ok) return  // finally handles cleanup
-              if (lastKnown) resolvedInst = { ...activeInstance, mcVersion: lastKnown }
-            }
-
-            // ─ Loader compatibility pre-check ────────────────────────────
-            const loader = resolvedInst.loader
-            if (loader && loader !== 'vanilla') {
-              setStatus(t('launch.checking_loader').replace('{0}', loader).replace('{1}', resolvedInst.mcVersion))
-              try {
-                const loaderVersions = await invoke<LoaderVersionInfo[]>('get_loader_versions', {
-                  mcVer: resolvedInst.mcVersion,
-                  loader,
-                })
-                if (loaderVersions.length === 0) {
-                  setLoaderNotAvail({ loader, mcVer: resolvedInst.mcVersion })
-                  return  // finally cleans up launching state
-                }
-              } catch { /* network error — Rust will surface a clear error at launch */ }
-            }
-          }
-        }
 
         const baseArgs = {
           instanceName: resolvedInst.name,
@@ -2268,9 +2325,13 @@ export default function App() {
           accessToken: acct.type === 'offline' ? '0' : (acct.accessToken ?? ''),
           concurrentDownloads: concurrentDl,
           maxRamMb: ramMb,
+          javaPath: localStorage.getItem('mlbv_java_path') ?? '',
+          jvmArgs: localStorage.getItem('mlbv_jvm_args') ?? '',
+          minRamMb,
         }
         if (showConsole) {
-          invoke('open_console_window', { instanceName: resolvedInst.name }).catch(() => {})
+          setConsoleInst(resolvedInst.name)
+          setConsoleOpen(true)
         }
         // A single command serves every loader; the backend picks the pipeline.
         const loader = resolvedInst.type === 'lb'
@@ -2318,6 +2379,7 @@ export default function App() {
   }
 
   const onHeroPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (consoleOpen) return
     if ((e.target as HTMLElement).closest('button, input, a, [role="button"]')) return
     e.currentTarget.setPointerCapture(e.pointerId)
     swipeStartX.current = e.clientX
@@ -2325,6 +2387,7 @@ export default function App() {
   const onHeroPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (swipeStartX.current === null) return
     e.currentTarget.releasePointerCapture(e.pointerId)
+    if (consoleOpen) { swipeStartX.current = null; return }
     const delta = e.clientX - swipeStartX.current
     swipeStartX.current = null
     if (Math.abs(delta) < 60) return
@@ -2343,6 +2406,12 @@ export default function App() {
             onRetry={appState === 'error' ? fetchVersions : undefined} />
         )}
       </AnimatePresence>
+
+      {appState === 'migrate' && migrateScan && (
+        <MigrationScreen key="migrate" pins={migratePins} scan={migrateScan}
+          versions={versions} instances={instances}
+          onApplyPins={applyMigrationPins} onDone={() => setAppState('ready')} />
+      )}
 
       <div className="bg-canvas">
         <div className="bg-grid" />
@@ -2585,7 +2654,7 @@ export default function App() {
                       isOtherBusy ? `tab-pill-loading-${tab}` : '',
                       isBusy      ? 'tab-pill-busy' : '',
                     ].filter(Boolean).join(' ')}
-                    onClick={() => setActiveTab(tab)}
+                    onClick={() => { setActiveTab(tab); setConsoleOpen(false) }}
                   >
                     {isOtherBusy && <div className="tab-pill-fill" style={{ width: `${progress}%` }} />}
                     <AnimatePresence mode="wait" initial={false}>
@@ -2600,6 +2669,23 @@ export default function App() {
                   </button>
                 )
               })}
+              <button
+                className={['tab-pill', consoleOpen ? 'tab-pill-active tab-pill-console' : ''].filter(Boolean).join(' ')}
+                onClick={() => {
+                  if (!consoleInst) {
+                    const d = activeInstance && running.includes(activeInstance.name)
+                      ? activeInstance.name
+                      : running[0] ?? null
+                    if (d) setConsoleInst(d)
+                  }
+                  setConsoleOpen(true)
+                }}
+              >
+                <span className="tab-pill-label">
+                  {running.length > 0 && <span className="dot" style={{ background: '#4ade80', boxShadow: '0 0 6px #4ade80' }} />}
+                  {t('tab.console')}
+                </span>
+              </button>
               <AnimatePresence>
                 {activeTab === 'lb' && (
                   <motion.button
@@ -2617,7 +2703,17 @@ export default function App() {
             </div>
 
             <AnimatePresence mode="wait">
-              {activeTab === 'mc' ? (
+              {consoleOpen ? (
+
+                /* ─── Console tab ─── */
+                <motion.div key="console-tab" className="tab-content console-tab-wrap"
+                  initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 16 }} transition={{ duration: 0.22, ease: [0.4,0,0.2,1] }}
+                >
+                  <ConsolePanel instanceName={consoleInst} running={running} onSelect={setConsoleInst} />
+                </motion.div>
+
+              ) : activeTab === 'mc' ? (
 
                 /* ─── Minecraft tab ─── */
                 <motion.div key="mc-tab" className="tab-content"
@@ -3004,81 +3100,6 @@ export default function App() {
           )}
         </AnimatePresence>
 
-        {/* ── NEW VERSION TOAST ── */}
-        <AnimatePresence>
-          {newVerToast && (
-            <motion.div className="new-ver-toast"
-              initial={{ opacity: 0, y: 16, scale: 0.95 }}
-              animate={{ opacity: 1, y: 0, scale: 1 }}
-              exit={{ opacity: 0, y: 10, scale: 0.95 }}
-              transition={spring}
-            >
-              ✦ {newVerToast.type === 'lb' ? 'LiquidBounce' : 'Minecraft'} {newVerToast.ver} — новая версия!
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── LOADER NOT AVAILABLE MODAL ── */}
-        <AnimatePresence>
-          {loaderNotAvail && (
-            <motion.div className="overlay" style={{ zIndex: 700 }}
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            >
-              <motion.div className="modal glass" style={{ width: 400 }}
-                initial={{ opacity: 0, scale: 0.9, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 16 }} transition={spring}
-                onClick={e => e.stopPropagation()}
-              >
-                <div className="modal-head">
-                  <span className="modal-title">⚠ Загрузчик недоступен</span>
-                  <button className="modal-close" onClick={() => setLoaderNotAvail(null)}>×</button>
-                </div>
-                <div className="fetch-fail-body">
-                  <div className="fetch-fail-icon">🧩</div>
-                  <div className="fetch-fail-text">
-                    <strong>{loaderNotAvail.loader.charAt(0).toUpperCase() + loaderNotAvail.loader.slice(1)}</strong> ещё не поддерживает Minecraft {loaderNotAvail.mcVer}.
-                    <br /><br />
-                    Авторы загрузчика обычно выпускают поддержку в течение нескольких дней после выхода новой версии MC.
-                    Попробуйте запустить позже.
-                  </div>
-                  <div className="fetch-fail-actions">
-                    <button className="btn-ok" onClick={() => setLoaderNotAvail(null)}>Понятно</button>
-                  </div>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
-        {/* ── FETCH FAIL MODAL ── */}
-        <AnimatePresence>
-          {fetchFailModal && (
-            <motion.div className="overlay" style={{ zIndex: 700 }}
-              initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-            >
-              <motion.div className="modal glass" style={{ width: 380 }}
-                initial={{ opacity: 0, scale: 0.9, y: 24 }} animate={{ opacity: 1, scale: 1, y: 0 }}
-                exit={{ opacity: 0, scale: 0.9, y: 16 }} transition={spring}
-                onClick={e => e.stopPropagation()}
-              >
-                <div className="modal-head">
-                  <span className="modal-title">⚠ Ошибка получения версии</span>
-                </div>
-                <div className="fetch-fail-body">
-                  <div className="fetch-fail-icon">🌐</div>
-                  <div className="fetch-fail-text">
-                    Не удалось получить список версий. Версия могла устареть и бла бла бла. Вы можете продолжить с последней известной версией или отменить запуск.
-                  </div>
-                  <div className="fetch-fail-actions">
-                    <button className="btn-cancel" onClick={fetchFailModal.onCancel}>Отмена</button>
-                    <button className="btn-ok" onClick={fetchFailModal.onContinue}>Продолжить с кешем</button>
-                  </div>
-                </div>
-              </motion.div>
-            </motion.div>
-          )}
-        </AnimatePresence>
-
       </motion.div>
       )}
       </AnimatePresence>
@@ -3093,9 +3114,9 @@ export default function App() {
         )}
       </AnimatePresence>
 
-      {/* ── SETUP WIZARD (overlays everything) ── */}
+      {/* ── SETUP WIZARD (overlays everything except migration) ── */}
       <AnimatePresence>
-        {!setupDone && (
+        {!setupDone && appState === 'ready' && (
           <motion.div key="wizard"
             style={{ position: 'fixed', inset: 0, zIndex: 9999 }}
             initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}

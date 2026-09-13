@@ -236,7 +236,7 @@ export default function LbConfigsPanel({ onClose, lbInstances }: Props) {
     const instVersion = lbInstances.find(i => i.name === t.name)?.version
     // Only warn if we know the exact installed version AND it differs from config's version
     const mismatch = cfg.meta.clientVersion && instVersion &&
-      instVersion !== 'latest' && instVersion !== cfg.meta.clientVersion
+      instVersion !== cfg.meta.clientVersion
     if (mismatch) setWarnInst({ cfg, t })
     else doInstall(cfg, t)
   }

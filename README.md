@@ -67,9 +67,11 @@ work. Issues and pull requests may go unanswered.
   pick up Java 25), while system installs are accepted when they are at least the required version.
 - Missing runtimes are downloaded from Eclipse Adoptium (Temurin): Java 8 for ≤ 1.16.5, 17 for
   1.17–1.20.4, 21 for 1.20.5+, 25 for newer. An existing Java install is never modified.
+- Optional custom Java executable, extra JVM arguments (appended after the launcher defaults,
+  so yours win on conflict), and a minimum-heap (Xms) setting next to max RAM.
 
 ### Downloads
-- Parallel asset downloads, configurable from 1 to 50 connections.
+- Parallel asset and library downloads, configurable from 1 to 50 connections.
 - Live speed readout covering assets, libraries, JARs, mods and Java, with pause/resume and cancel.
 - Downloads stream to disk (a `.part` file that is renamed on success) and are verified against
   the manifest size and SHA-1 when the manifest provides one.
@@ -87,15 +89,20 @@ work. Issues and pull requests may go unanswered.
   and one-click install into a chosen instance.
 
 ### Everything else
+- One-time 0.0.5 migration for updaters: pins rolling “Latest” instances to their
+  installed versions and deletes the stale shared-natives folders (≤0.0.4 mixed
+  every loader's natives into one folder, which broke launches). Saves, mods,
+  configs, libraries, assets and Java are kept — nothing is re-downloaded.
 - First-run setup wizard: language → preferences → account → Java provisioning.
-- Separate always-on-top **console window** streaming live game output.
+- **Console tab** in the main window streaming live game output, with a per-instance
+  selector when several games run at once.
 - Crash dialog with the last 80 lines of output when the game exits with a non-zero code.
 - **Mod manager**: browse and install from Modrinth and CurseForge without leaving the launcher
   (CurseForge needs your free API key in Settings), icons + versions in the list, one-click
   enable/disable, update checks with update-all, and one-click mod-list export.
 - Accent colour theming (8 presets + custom hex), collapsible sidebar, swipe between the Minecraft
   and LiquidBounce tabs, hide-launcher-on-launch.
-- English and Russian UI (285 keys per language).
+- English and Russian UI (323 keys per language).
 
 ---
 

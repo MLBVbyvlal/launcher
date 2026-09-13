@@ -87,6 +87,7 @@ const S: Record<Lang, Record<string, string>> = {
     // Main UI
     'tab.mc': 'Minecraft',
     'tab.lb': 'LiquidBounce',
+    'tab.console': 'Console',
     'play': 'Play',
     'play.lb': 'Launch LiquidBounce',
     'stop': 'Stop',
@@ -122,12 +123,19 @@ const S: Record<Lang, Record<string, string>> = {
     // Settings — performance
     'settings.ram': 'RAM',
     'settings.concurrent': 'Parallel Downloads',
+    'settings.min_ram': 'Min RAM (Xms)',
 
     // Settings — java
     'settings.java': 'Java',
     'settings.java_auto': '↓ auto-download',
     'settings.java_found': '✓ found',
     'settings.java_hint': 'Missing versions download automatically on first launch.',
+    'settings.java_path': 'Custom Java executable',
+    'settings.java_path_ph': 'Empty = auto-detect…',
+    'settings.java_path_hint': 'Full path to java / javaw. Checked at launch — falls back to auto-detect when missing. Applies to the game only, not the Forge/NeoForge installer.',
+    'settings.jvm_args': 'Extra JVM arguments',
+    'settings.jvm_args_ph': '-XX:+UseG1GC …',
+    'settings.jvm_args_hint': 'Space-separated, added after the launcher defaults — yours win on conflict.',
 
     // Settings — about
     'settings.about': 'About',
@@ -197,6 +205,7 @@ const S: Record<Lang, Record<string, string>> = {
     // Instance settings modal
     'isettings.ram': 'RAM Override',
     'isettings.ram_hint': 'Leave empty to use global default',
+    'isettings.min_ram': 'Min RAM Override',
     'isettings.logs': 'Logs',
     'isettings.open_logs': 'Open logs folder',
     'isettings.no_log': 'No log yet — launch the instance first.',
@@ -270,8 +279,8 @@ const S: Record<Lang, Record<string, string>> = {
     'reinstall.choose': 'Choose what to keep when reinstalling this instance.',
 
     // Console toggle
-    'settings.console': 'Console Window',
-    'settings.console_hint': 'Show live log window when game starts',
+    'settings.console': 'Console tab on launch',
+    'settings.console_hint': 'Switch to the Console tab when a game starts',
 
     // Mod loader picker
     'inst.loader.title': 'Mod Loader',
@@ -280,7 +289,9 @@ const S: Record<Lang, Record<string, string>> = {
     'inst.loader.fabric': 'Fabric',
     'inst.loader.vanilla_desc': 'No mods, pure Minecraft',
     'inst.loader.fabric_desc': 'Includes Fabric API from Modrinth',
-    'inst.loader.soon': 'Coming soon',
+    'inst.loader.quilt_desc': 'Modular loader, Fabric-compatible',
+    'inst.loader.forge_desc': 'Classic mods, installer-based',
+    'inst.loader.neoforge_desc': 'Modern Forge fork, installer-based',
 
     // Console window
     'console.title': 'Console',
@@ -289,6 +300,34 @@ const S: Record<Lang, Record<string, string>> = {
     'console.empty': 'Waiting for game output…',
     'console.lines': 'lines',
     'console.clear': 'Clear',
+    'console.copied': 'Copied',
+    'console.no_running': 'No game running — launch an instance and its output will appear here.',
+    'migrate.title': 'Update 0.0.5 — version conversion',
+    'migrate.subtitle': 'Required once — the launcher will not start until it finishes.',
+    'migrate.what': 'What changed',
+    'migrate.p1': 'Old versions mixed native libraries of every mod loader in one shared folder, which broke launches. Each instance now gets its own clean natives.',
+    'migrate.p2': 'Rolling “Latest” versions are removed: every instance is pinned to the exact version you have installed.',
+    'migrate.p3': 'Nothing you care about is touched: saves, mods, configs, screenshots and settings stay exactly where they are.',
+    'migrate.plan_pin': 'Pin versions',
+    'migrate.plan_clean': 'Delete stale files',
+    'migrate.plan_empty': 'Nothing to convert — your data is already in the new format. Press continue to finish.',
+    'migrate.kind.natives': 'Stale shared natives',
+    'migrate.kind.inst_versions': 'Old per-instance version copies',
+    'migrate.kind.part': 'Interrupted downloads',
+    'migrate.kind.temp': 'Old update packages',
+    'migrate.lb_head': 'newest build',
+    'migrate.convert': 'Convert',
+    'migrate.continue': 'Continue',
+    'migrate.enter': 'Open launcher',
+    'migrate.step_pin': 'Pinning versions…',
+    'migrate.step_clean': 'Cleaning stale files…',
+    'migrate.step_verify': 'Verifying…',
+    'migrate.done': 'Conversion complete. Freed {0}.',
+    'migrate.kept': 'Kept: saves, mods, configs, libraries, assets, Java — nothing to re-download.',
+    'migrate.error_pin': 'Could not pin {0}: {1}',
+    'migrate.err_lb_offline': 'no network — connect once to pin the LiquidBounce build',
+    'migrate.err_verify': 'Verification failed — {0}. Press retry to run the conversion again.',
+    'migrate.err_clean': 'Cleanup reported errors: {0}',
 
     // Loader version picker (step 3)
     'inst.loader.ver.title': 'Loader Version',
@@ -355,7 +394,6 @@ const S: Record<Lang, Record<string, string>> = {
     'loader.beta_label': 'beta',
 
     // Launch status
-    'launch.checking_loader': 'Checking {0} for MC {1}…',
 
     // Update modal — unstable warning
     'update.unstable_warn': '⚠ Unstable version.',
@@ -460,6 +498,7 @@ const S: Record<Lang, Record<string, string>> = {
     // Main UI
     'tab.mc': 'Minecraft',
     'tab.lb': 'LiquidBounce',
+    'tab.console': 'Консоль',
     'play': 'Играть',
     'play.lb': 'Запустить LiquidBounce',
     'stop': 'Остановить',
@@ -495,12 +534,19 @@ const S: Record<Lang, Record<string, string>> = {
     // Settings — performance
     'settings.ram': 'RAM',
     'settings.concurrent': 'Параллельных загрузок',
+    'settings.min_ram': 'Мин. RAM (Xms)',
 
     // Settings — java
     'settings.java': 'Java',
     'settings.java_auto': '↓ автоскачка',
     'settings.java_found': '✓ найдена',
     'settings.java_hint': 'Отсутствующие версии скачаются автоматически при запуске.',
+    'settings.java_path': 'Свой исполняемый файл Java',
+    'settings.java_path_ph': 'Пусто = автовыбор…',
+    'settings.java_path_hint': 'Полный путь к java / javaw. Проверяется при запуске — если файла нет, используется автовыбор. Действует только на игру, не на установщик Forge/NeoForge.',
+    'settings.jvm_args': 'Дополнительные JVM-аргументы',
+    'settings.jvm_args_ph': '-XX:+UseG1GC …',
+    'settings.jvm_args_hint': 'Через пробел, добавляются после стандартных — ваши побеждают при конфликте.',
 
     // Settings — about
     'settings.about': 'О лаунчере',
@@ -570,6 +616,7 @@ const S: Record<Lang, Record<string, string>> = {
     // Instance settings modal
     'isettings.ram': 'Переопределение RAM',
     'isettings.ram_hint': 'Оставьте пустым для глобального значения',
+    'isettings.min_ram': 'Переопределение мин. RAM',
     'isettings.logs': 'Логи',
     'isettings.open_logs': 'Открыть папку с логами',
     'isettings.no_log': 'Логов пока нет — сначала запустите инстанс.',
@@ -643,8 +690,8 @@ const S: Record<Lang, Record<string, string>> = {
     'reinstall.choose': 'Выберите, что сохранить при переустановке инстанса.',
 
     // Console toggle
-    'settings.console': 'Окно консоли',
-    'settings.console_hint': 'Показывать окно логов при запуске игры',
+    'settings.console': 'Вкладка консоли при запуске',
+    'settings.console_hint': 'Переключаться на вкладку «Консоль» при старте игры',
 
     // Mod loader picker
     'inst.loader.title': 'Загрузчик модов',
@@ -653,7 +700,9 @@ const S: Record<Lang, Record<string, string>> = {
     'inst.loader.fabric': 'Fabric',
     'inst.loader.vanilla_desc': 'Без модов, чистый Minecraft',
     'inst.loader.fabric_desc': 'Включает Fabric API с Modrinth',
-    'inst.loader.soon': 'Скоро',
+    'inst.loader.quilt_desc': 'Модульный загрузчик, совместим с Fabric',
+    'inst.loader.forge_desc': 'Классические моды, через установщик',
+    'inst.loader.neoforge_desc': 'Современный форк Forge, через установщик',
 
     // Console window
     'console.title': 'Консоль',
@@ -662,6 +711,34 @@ const S: Record<Lang, Record<string, string>> = {
     'console.empty': 'Ожидание вывода игры…',
     'console.lines': 'строк',
     'console.clear': 'Очистить',
+    'console.copied': 'Скопировано',
+    'console.no_running': 'Игра не запущена — запустите инстанс, и его вывод появится здесь.',
+    'migrate.title': 'Обновление 0.0.5 — конвертация версий',
+    'migrate.subtitle': 'Требуется один раз — лаунчер не запустится, пока она не закончится.',
+    'migrate.what': 'Что изменилось',
+    'migrate.p1': 'Старые версии мешали нативные библиотеки всех загрузчиков в одну общую папку, из-за чего ломались запуски. Теперь у каждого инстанса свои чистые нативки.',
+    'migrate.p2': 'Плавающие версии «Latest» убраны: каждый инстанс привязывается к той версии, что у вас установлена.',
+    'migrate.p3': 'Ничего важного не трогаем: сейвы, моды, конфиги, скриншоты и настройки остаются на месте.',
+    'migrate.plan_pin': 'Привязка версий',
+    'migrate.plan_clean': 'Удаление устаревших файлов',
+    'migrate.plan_empty': 'Конвертировать нечего — данные уже в новом формате. Нажмите «Продолжить».',
+    'migrate.kind.natives': 'Устаревшие общие нативки',
+    'migrate.kind.inst_versions': 'Старые копии версий в инстансах',
+    'migrate.kind.part': 'Оборванные загрузки',
+    'migrate.kind.temp': 'Старые пакеты обновлений',
+    'migrate.lb_head': 'новейший билд',
+    'migrate.convert': 'Конвертировать',
+    'migrate.continue': 'Продолжить',
+    'migrate.enter': 'Открыть лаунчер',
+    'migrate.step_pin': 'Привязка версий…',
+    'migrate.step_clean': 'Чистка устаревших файлов…',
+    'migrate.step_verify': 'Проверка…',
+    'migrate.done': 'Конвертация завершена. Освобождено: {0}.',
+    'migrate.kept': 'Сохранено: сейвы, моды, конфиги, библиотеки, ассеты, Java — перекачивать ничего не нужно.',
+    'migrate.error_pin': 'Не удалось привязать {0}: {1}',
+    'migrate.err_lb_offline': 'нет сети — подключитесь один раз, чтобы привязать сборку LiquidBounce',
+    'migrate.err_verify': 'Проверка не прошла — {0}. Нажмите «Ещё раз», чтобы повторить.',
+    'migrate.err_clean': 'При чистке возникли ошибки: {0}',
 
     // Loader version picker (step 3)
     'inst.loader.ver.title': 'Версия загрузчика',
@@ -728,7 +805,6 @@ const S: Record<Lang, Record<string, string>> = {
     'loader.beta_label': 'бета',
 
     // Launch status
-    'launch.checking_loader': 'Проверяем {0} для MC {1}…',
 
     // Update modal — unstable warning
     'update.unstable_warn': '⚠ Нестабильная версия.',
