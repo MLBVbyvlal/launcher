@@ -87,6 +87,7 @@ const S: Record<Lang, Record<string, string>> = {
     // Main UI
     'tab.mc': 'Minecraft',
     'tab.lb': 'LiquidBounce',
+    'tab.console': 'Console',
     'play': 'Play',
     'play.lb': 'Launch LiquidBounce',
     'stop': 'Stop',
@@ -122,12 +123,19 @@ const S: Record<Lang, Record<string, string>> = {
     // Settings — performance
     'settings.ram': 'RAM',
     'settings.concurrent': 'Parallel Downloads',
+    'settings.min_ram': 'Min RAM (Xms)',
 
     // Settings — java
     'settings.java': 'Java',
     'settings.java_auto': '↓ auto-download',
     'settings.java_found': '✓ found',
     'settings.java_hint': 'Missing versions download automatically on first launch.',
+    'settings.java_path': 'Custom Java executable',
+    'settings.java_path_ph': 'Empty = auto-detect…',
+    'settings.java_path_hint': 'Full path to java / javaw. Checked at launch — falls back to auto-detect when missing. Applies to the game only, not the Forge/NeoForge installer.',
+    'settings.jvm_args': 'Extra JVM arguments',
+    'settings.jvm_args_ph': '-XX:+UseG1GC …',
+    'settings.jvm_args_hint': 'Space-separated, added after the launcher defaults — yours win on conflict.',
 
     // Settings — about
     'settings.about': 'About',
@@ -270,8 +278,8 @@ const S: Record<Lang, Record<string, string>> = {
     'reinstall.choose': 'Choose what to keep when reinstalling this instance.',
 
     // Console toggle
-    'settings.console': 'Console Window',
-    'settings.console_hint': 'Show live log window when game starts',
+    'settings.console': 'Console tab on launch',
+    'settings.console_hint': 'Switch to the Console tab when a game starts',
 
     // Mod loader picker
     'inst.loader.title': 'Mod Loader',
@@ -280,7 +288,9 @@ const S: Record<Lang, Record<string, string>> = {
     'inst.loader.fabric': 'Fabric',
     'inst.loader.vanilla_desc': 'No mods, pure Minecraft',
     'inst.loader.fabric_desc': 'Includes Fabric API from Modrinth',
-    'inst.loader.soon': 'Coming soon',
+    'inst.loader.quilt_desc': 'Modular loader, Fabric-compatible',
+    'inst.loader.forge_desc': 'Classic mods, installer-based',
+    'inst.loader.neoforge_desc': 'Modern Forge fork, installer-based',
 
     // Console window
     'console.title': 'Console',
@@ -289,6 +299,8 @@ const S: Record<Lang, Record<string, string>> = {
     'console.empty': 'Waiting for game output…',
     'console.lines': 'lines',
     'console.clear': 'Clear',
+    'console.copied': 'Copied',
+    'console.no_running': 'No game running — launch an instance and its output will appear here.',
 
     // Loader version picker (step 3)
     'inst.loader.ver.title': 'Loader Version',
@@ -460,6 +472,7 @@ const S: Record<Lang, Record<string, string>> = {
     // Main UI
     'tab.mc': 'Minecraft',
     'tab.lb': 'LiquidBounce',
+    'tab.console': 'Консоль',
     'play': 'Играть',
     'play.lb': 'Запустить LiquidBounce',
     'stop': 'Остановить',
@@ -495,12 +508,19 @@ const S: Record<Lang, Record<string, string>> = {
     // Settings — performance
     'settings.ram': 'RAM',
     'settings.concurrent': 'Параллельных загрузок',
+    'settings.min_ram': 'Мин. RAM (Xms)',
 
     // Settings — java
     'settings.java': 'Java',
     'settings.java_auto': '↓ автоскачка',
     'settings.java_found': '✓ найдена',
     'settings.java_hint': 'Отсутствующие версии скачаются автоматически при запуске.',
+    'settings.java_path': 'Свой исполняемый файл Java',
+    'settings.java_path_ph': 'Пусто = автовыбор…',
+    'settings.java_path_hint': 'Полный путь к java / javaw. Проверяется при запуске — если файла нет, используется автовыбор. Действует только на игру, не на установщик Forge/NeoForge.',
+    'settings.jvm_args': 'Дополнительные JVM-аргументы',
+    'settings.jvm_args_ph': '-XX:+UseG1GC …',
+    'settings.jvm_args_hint': 'Через пробел, добавляются после стандартных — ваши побеждают при конфликте.',
 
     // Settings — about
     'settings.about': 'О лаунчере',
@@ -643,8 +663,8 @@ const S: Record<Lang, Record<string, string>> = {
     'reinstall.choose': 'Выберите, что сохранить при переустановке инстанса.',
 
     // Console toggle
-    'settings.console': 'Окно консоли',
-    'settings.console_hint': 'Показывать окно логов при запуске игры',
+    'settings.console': 'Вкладка консоли при запуске',
+    'settings.console_hint': 'Переключаться на вкладку «Консоль» при старте игры',
 
     // Mod loader picker
     'inst.loader.title': 'Загрузчик модов',
@@ -653,7 +673,9 @@ const S: Record<Lang, Record<string, string>> = {
     'inst.loader.fabric': 'Fabric',
     'inst.loader.vanilla_desc': 'Без модов, чистый Minecraft',
     'inst.loader.fabric_desc': 'Включает Fabric API с Modrinth',
-    'inst.loader.soon': 'Скоро',
+    'inst.loader.quilt_desc': 'Модульный загрузчик, совместим с Fabric',
+    'inst.loader.forge_desc': 'Классические моды, через установщик',
+    'inst.loader.neoforge_desc': 'Современный форк Forge, через установщик',
 
     // Console window
     'console.title': 'Консоль',
@@ -662,6 +684,8 @@ const S: Record<Lang, Record<string, string>> = {
     'console.empty': 'Ожидание вывода игры…',
     'console.lines': 'строк',
     'console.clear': 'Очистить',
+    'console.copied': 'Скопировано',
+    'console.no_running': 'Игра не запущена — запустите инстанс, и его вывод появится здесь.',
 
     // Loader version picker (step 3)
     'inst.loader.ver.title': 'Версия загрузчика',

@@ -738,66 +738,7 @@ async fn reset_all_data() -> Result<(), String> {
     Ok(())
 }
 
-// ── Console window support ────────────────────────────────────────────────────
-
-#[derive(serde::Serialize, serde::Deserialize, Clone)]
-struct ConsoleInfo {
-    instance_name: String,
-    log_path: String,
-}
-
-struct ConsoleState {
-    info: std::sync::Mutex<Option<ConsoleInfo>>,
-}
-
-#[tauri::command]
-fn get_window_type(window: tauri::WebviewWindow) -> String {
-    if window.label() == "console" { "console".to_string() } else { "main".to_string() }
-}
-
-#[tauri::command]
-async fn open_console_window(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
-    launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
-    let log_path = launcher::mlbv_base()
-        .join("instances")
-        .join(&instance_name)
-        .join("logs")
-        .join("latest.log")
-        .to_string_lossy()
-        .into_owned();
-
-    *app.state::<ConsoleState>().info.lock().unwrap() = Some(ConsoleInfo {
-        instance_name: instance_name.clone(),
-        log_path,
-    });
-
-    // Close existing console window if open
-    if let Some(win) = app.get_webview_window("console") {
-        let _ = win.close();
-        tokio::time::sleep(tokio::time::Duration::from_millis(250)).await;
-    }
-
-    tauri::WebviewWindowBuilder::new(
-        &app, "console",
-        tauri::WebviewUrl::App("index.html".into()),
-    )
-    .title(format!("MLBV Console — {instance_name}"))
-    .inner_size(820.0, 580.0)
-    .min_inner_size(600.0, 400.0)
-    .decorations(false)
-    .center()
-    .build()
-    .map_err(|e| format!("Console window: {e}"))?;
-
-    Ok(())
-}
-
-#[tauri::command]
-fn get_console_info(app: tauri::AppHandle) -> Option<ConsoleInfo> {
-    app.state::<ConsoleState>().info.lock().unwrap().clone()
-}
-
-// ── JVM output streaming ────────────────────────────────────────────────────
+// ── JVM output streaming (Console tab polls this) ───────────────────────────────
 
 #[derive(serde::Serialize)]
 struct JvmPollResult {
@@ -1142,7 +1083,6 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .manage(launcher::GameState::new())
-        .manage(ConsoleState { info: std::sync::Mutex::new(None) })
         .invoke_handler(tauri::generate_handler![
             get_game_dir,
             launch_game,
@@ -1166,10 +1106,7 @@ pub fn run() {
             get_just_updated,
             open_url,
             get_debug_info,
-            get_window_type,
             open_game_dir,
-            open_console_window,
-            get_console_info,
             poll_jvm_output,
             install_lb_config,
             get_lb_installable_instances,

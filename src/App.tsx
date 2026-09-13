@@ -8,6 +8,7 @@ import lbBadgePng from './assets/lb-badge-logo.png'
 import SetupWizard from './SetupWizard'
 import LbConfigsPanel from './LbConfigsPanel'
 import ModBrowser, { ModIcon } from './ModBrowser'
+import ConsolePanel from './ConsolePanel'
 import { getLang, type Lang, useT } from './i18n'
 import './App.css'
 
@@ -192,6 +193,10 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   const [ramDraft, setRamDraft]             = useState<string | null>(null)
   const [concurrent, setConcurrent]         = useState(() => { const s = localStorage.getItem('mlbv_concurrent'); return s ? Number(s) : 5 })
   const [concurrentDraft, setConcurrentDraft] = useState<string | null>(null)
+  const [minRam, setMinRam]       = useState(() => { const s = localStorage.getItem('mlbv_min_ram'); return s ? Number(s) : 512 })
+  const [minRamDraft, setMinRamDraft] = useState<string | null>(null)
+  const [javaPath, setJavaPath]   = useState(() => localStorage.getItem('mlbv_java_path') ?? '')
+  const [jvmArgs, setJvmArgs]     = useState(() => localStorage.getItem('mlbv_jvm_args') ?? '')
   const [closeOnLaunch, setCloseOnLaunch]   = useState(() => localStorage.getItem('mlbv_close_on_launch') === '1')
   const [consoleEnabled, setConsoleEnabled] = useState(() => localStorage.getItem('mlbv_console_enabled') === '1')
   const [javaInstalls, setJavaInstalls]     = useState<{ major: number; path: string }[]>([])
@@ -243,6 +248,9 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   }, [])
 
   useEffect(() => { localStorage.setItem('mlbv_ram', String(ram)) }, [ram])
+  useEffect(() => { localStorage.setItem('mlbv_min_ram', String(minRam)) }, [minRam])
+  useEffect(() => { localStorage.setItem('mlbv_java_path', javaPath) }, [javaPath])
+  useEffect(() => { localStorage.setItem('mlbv_jvm_args', jvmArgs) }, [jvmArgs])
   useEffect(() => { localStorage.setItem('mlbv_concurrent', String(concurrent)) }, [concurrent])
   useEffect(() => { localStorage.setItem('mlbv_close_on_launch', closeOnLaunch ? '1' : '0') }, [closeOnLaunch])
   useEffect(() => { localStorage.setItem('mlbv_console_enabled', consoleEnabled ? '1' : '0') }, [consoleEnabled])
@@ -254,8 +262,10 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
   }, [dangerOpen, countdown])
 
   const clampRam        = (v: number) => Math.min(16384, Math.max(512, Math.round(v / 512) * 512))
+  const clampMinRam     = (v: number) => Math.min(8192, Math.max(256, Math.round(v / 256) * 256))
   const clampConcurrent = (v: number) => Math.min(50, Math.max(1, Math.round(v)))
   const commitRam        = (raw: string) => { const n = Number(raw); if (!isNaN(n) && n > 0) setRam(clampRam(n)); setRamDraft(null) }
+  const commitMinRam     = (raw: string) => { const n = Number(raw); if (!isNaN(n) && n > 0) setMinRam(clampMinRam(n)); setMinRamDraft(null) }
   const commitConcurrent = (raw: string) => { const n = Number(raw); if (!isNaN(n) && n > 0) setConcurrent(clampConcurrent(n)); setConcurrentDraft(null) }
 
   const concurrentWarning = concurrent < 5
@@ -447,6 +457,23 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
                   </div>
                   <div className="setting-group">
                     <div className="setting-label-row">
+                      <div className="setting-label">{t('settings.min_ram')} — {minRam >= 1024 ? `${(minRam/1024).toFixed(1)} GB` : `${minRam} MB`}</div>
+                      <Tip text={t('settings.tip.ram')} />
+                    </div>
+                    <div className="ram-row">
+                      <div className="ram-slider-wrap">
+                        <input type="range" className="glass-range" min={256} max={8192} step={256}
+                          value={Math.min(minRam, 8192)} onChange={e => { setMinRam(Number(e.target.value)); setMinRamDraft(null) }} />
+                      </div>
+                      <input type="number" className="ram-input" min={256} max={8192}
+                        value={minRamDraft ?? minRam}
+                        onChange={e => setMinRamDraft(e.target.value)}
+                        onBlur={e => commitMinRam(e.target.value)}
+                        onKeyDown={e => { if (e.key === 'Enter') e.currentTarget.blur() }} />
+                    </div>
+                  </div>
+                  <div className="setting-group">
+                    <div className="setting-label-row">
                       <div className="setting-label">{t('settings.concurrent')} — {concurrent}</div>
                       <Tip text={t('settings.tip.concurrent')} />
                     </div>
@@ -488,6 +515,22 @@ function SettingsModal({ onClose, onLangChange, updateCheckError }: { onClose: (
                       })}
                     </div>
                     <div className="setting-hint">{t('settings.java_hint')}</div>
+                  </div>
+                  <div className="setting-group">
+                    <div className="setting-label-row">
+                      <div className="setting-label">{t('settings.java_path')}</div>
+                      <Tip text={t('settings.java_path_hint')} />
+                    </div>
+                    <input type="text" className="lb-input" placeholder={t('settings.java_path_ph')}
+                      value={javaPath} onChange={e => setJavaPath(e.target.value)} spellCheck={false} />
+                  </div>
+                  <div className="setting-group">
+                    <div className="setting-label-row">
+                      <div className="setting-label">{t('settings.jvm_args')}</div>
+                      <Tip text={t('settings.jvm_args_hint')} />
+                    </div>
+                    <input type="text" className="lb-input" placeholder={t('settings.jvm_args_ph')}
+                      value={jvmArgs} onChange={e => setJvmArgs(e.target.value)} spellCheck={false} />
                   </div>
                 </>}
 
@@ -654,6 +697,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
   const [selectedLoader, setSelectedLoader] = useState<'vanilla' | 'fabric' | 'quilt' | 'forge' | 'neoforge'>('vanilla')
   const [loaderVersions, setLoaderVersions] = useState<LoaderVersionInfo[]>([])
   const [loaderVerLoading, setLoaderVerLoading] = useState(false)
+  const [loaderVerError, setLoaderVerError] = useState('')
   const [selectedLoaderVer, setSelectedLoaderVer] = useState<string>('')
   const [loaderShowAll, setLoaderShowAll] = useState(false)
   const [unstableWarn, setUnstableWarn]       = useState(false)
@@ -761,6 +805,23 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
     ? [latestMcEntry, ...filteredMcBase]
     : filteredMcBase
 
+  // Forge/NeoForge manifests never contain "latest" — resolve it to the current
+  // newest release so the version picker works for every loader.
+  const mcForLoaderFetch = selVer === 'latest' ? (filteredMcBase[0]?.id ?? selVer) : selVer
+  const fetchLoaderVers = (mcId: string) => {
+    if (!isTauri) return
+    setLoaderVerLoading(true)
+    setLoaderVerError('')
+    invoke<LoaderVersionInfo[]>('get_loader_versions', { mcVer: mcId, loader: selectedLoader })
+      .then(vs => {
+        setLoaderVersions(vs)
+        const first = vs.find(v => v.stable) ?? vs[0]
+        if (first) setSelectedLoaderVer(first.version)
+      })
+      .catch((e) => setLoaderVerError(String(e)))
+      .finally(() => setLoaderVerLoading(false))
+  }
+
   const handleCreate = () => {
     const finalName = displayName.trim()
     if (!finalName) return
@@ -783,7 +844,8 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
       mcVersion: mcVerHint,
       buildId: selVer === 'latest' ? undefined : lbBuild?.buildId,
       loader: instType === 'mc' ? selectedLoader : undefined,
-      loaderVersion: (instType === 'mc' && selectedLoader !== 'vanilla' && selVer !== 'latest') ? selectedLoaderVer : undefined,
+      // fabric/quilt resolve "latest" by themselves; forge/neoforge need the exact pick stored.
+      loaderVersion: (instType === 'mc' && selectedLoader !== 'vanilla' && (selVer !== 'latest' || selectedLoader === 'forge' || selectedLoader === 'neoforge')) ? (selectedLoaderVer || undefined) : undefined,
     })
     onClose()
   }
@@ -841,9 +903,9 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
               {([
                 { id: 'vanilla',  icon: '🌿', label: t('inst.loader.vanilla'),  desc: t('inst.loader.vanilla_desc') },
                 { id: 'fabric',   icon: '🧵', label: t('inst.loader.fabric'),   desc: t('inst.loader.fabric_desc') },
-                { id: 'quilt',    icon: '🪡', label: 'Quilt',    desc: 'Quilt mod loader' },
-                { id: 'forge',    icon: '⚒️', label: 'Forge',    desc: 'Forge mod loader' },
-                { id: 'neoforge', icon: '🔥', label: 'NeoForge', desc: 'NeoForge mod loader' },
+                { id: 'quilt',    icon: '🪡', label: 'Quilt',    desc: t('inst.loader.quilt_desc') },
+                { id: 'forge',    icon: '⚒️', label: 'Forge',    desc: t('inst.loader.forge_desc') },
+                { id: 'neoforge', icon: '🔥', label: 'NeoForge', desc: t('inst.loader.neoforge_desc') },
               ]).map(opt => (
                 <div key={opt.id}
                   className={['loader-opt', selectedLoader === opt.id ? 'loader-selected' : ''].filter(Boolean).join(' ')}
@@ -859,7 +921,11 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
               ))}
             </div>
             <div className="loader-step-hint">
-              {selectedLoader === 'vanilla' ? t('inst.loader.vanilla_desc') : t('inst.loader.fabric_desc')}
+              {selectedLoader === 'vanilla' ? t('inst.loader.vanilla_desc')
+                : selectedLoader === 'fabric' ? t('inst.loader.fabric_desc')
+                : selectedLoader === 'quilt' ? t('inst.loader.quilt_desc')
+                : selectedLoader === 'forge' ? t('inst.loader.forge_desc')
+                : t('inst.loader.neoforge_desc')}
             </div>
           </>
           ) : (
@@ -884,6 +950,11 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
             <div className="vlist">
               {loaderVerLoading ? (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.loader.ver.loading')}</div>
+              ) : loaderVerError ? (
+                <div style={{ padding: 20, display: 'flex', flexDirection: 'column', gap: 10, alignItems: 'flex-start' }}>
+                  <div style={{ color: '#f87171', fontSize: 12 }}>{t('error.prefix')} {loaderVerError}</div>
+                  <button className="btn-retry" onClick={() => fetchLoaderVers(mcForLoaderFetch)}>{t('error.retry')}</button>
+                </div>
               ) : loaderVersions.length === 0 ? (
                 <div style={{ padding: 20, color: 'var(--text-muted)', fontSize: 13 }}>{t('inst.loader.ver.none')}</div>
               ) : (() => {
@@ -1071,13 +1142,7 @@ function CreateInstanceModal({ defaultTab, mcVersions, existingNames, onAdd, onC
               setStep(3)
               setSelectedLoaderVer('')
               setLoaderVersions([])
-              if (isTauri) {
-                setLoaderVerLoading(true)
-                invoke<LoaderVersionInfo[]>('get_loader_versions', { mcVer: selVer, loader: selectedLoader })
-                  .then(vs => { setLoaderVersions(vs); const first = vs.find(v => v.stable) ?? vs[0]; if (first) setSelectedLoaderVer(first.version) })
-                  .catch(() => {})
-                  .finally(() => setLoaderVerLoading(false))
-              }
+              fetchLoaderVers(mcForLoaderFetch)
             }}>
               {selectedLoader === 'vanilla' ? t('inst.modal.create') : t('inst.loader.next')}
             </button>
@@ -1868,6 +1933,9 @@ export default function App() {
   const [launchingTab, setLaunchingTab]       = useState<Tab | null>(null)
   // Instances with a live game process. Several may run at the same time.
   const [running, setRunning]                 = useState<string[]>([])
+  // Console tab overlays whichever mc/lb tab is underneath; the game keeps running.
+  const [consoleOpen, setConsoleOpen]         = useState(false)
+  const [consoleInst, setConsoleInst]         = useState<string | null>(null)
   const [stopWarn, setStopWarn]               = useState(false)
   const [stopCd, setStopCd]                   = useState(5)
   const stopCdRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -2268,9 +2336,13 @@ export default function App() {
           accessToken: acct.type === 'offline' ? '0' : (acct.accessToken ?? ''),
           concurrentDownloads: concurrentDl,
           maxRamMb: ramMb,
+          javaPath: localStorage.getItem('mlbv_java_path') ?? '',
+          jvmArgs: localStorage.getItem('mlbv_jvm_args') ?? '',
+          minRamMb: Number(localStorage.getItem('mlbv_min_ram') ?? '512') || 512,
         }
         if (showConsole) {
-          invoke('open_console_window', { instanceName: resolvedInst.name }).catch(() => {})
+          setConsoleInst(resolvedInst.name)
+          setConsoleOpen(true)
         }
         // A single command serves every loader; the backend picks the pipeline.
         const loader = resolvedInst.type === 'lb'
@@ -2318,6 +2390,7 @@ export default function App() {
   }
 
   const onHeroPointerDown = (e: React.PointerEvent<HTMLDivElement>) => {
+    if (consoleOpen) return
     if ((e.target as HTMLElement).closest('button, input, a, [role="button"]')) return
     e.currentTarget.setPointerCapture(e.pointerId)
     swipeStartX.current = e.clientX
@@ -2325,6 +2398,7 @@ export default function App() {
   const onHeroPointerUp = (e: React.PointerEvent<HTMLDivElement>) => {
     if (swipeStartX.current === null) return
     e.currentTarget.releasePointerCapture(e.pointerId)
+    if (consoleOpen) { swipeStartX.current = null; return }
     const delta = e.clientX - swipeStartX.current
     swipeStartX.current = null
     if (Math.abs(delta) < 60) return
@@ -2585,7 +2659,7 @@ export default function App() {
                       isOtherBusy ? `tab-pill-loading-${tab}` : '',
                       isBusy      ? 'tab-pill-busy' : '',
                     ].filter(Boolean).join(' ')}
-                    onClick={() => setActiveTab(tab)}
+                    onClick={() => { setActiveTab(tab); setConsoleOpen(false) }}
                   >
                     {isOtherBusy && <div className="tab-pill-fill" style={{ width: `${progress}%` }} />}
                     <AnimatePresence mode="wait" initial={false}>
@@ -2600,6 +2674,23 @@ export default function App() {
                   </button>
                 )
               })}
+              <button
+                className={['tab-pill', consoleOpen ? 'tab-pill-active tab-pill-console' : ''].filter(Boolean).join(' ')}
+                onClick={() => {
+                  if (!consoleInst) {
+                    const d = activeInstance && running.includes(activeInstance.name)
+                      ? activeInstance.name
+                      : running[0] ?? null
+                    if (d) setConsoleInst(d)
+                  }
+                  setConsoleOpen(true)
+                }}
+              >
+                <span className="tab-pill-label">
+                  {running.length > 0 && <span className="dot" style={{ background: '#4ade80', boxShadow: '0 0 6px #4ade80' }} />}
+                  {t('tab.console')}
+                </span>
+              </button>
               <AnimatePresence>
                 {activeTab === 'lb' && (
                   <motion.button
@@ -2617,7 +2708,17 @@ export default function App() {
             </div>
 
             <AnimatePresence mode="wait">
-              {activeTab === 'mc' ? (
+              {consoleOpen ? (
+
+                /* ─── Console tab ─── */
+                <motion.div key="console-tab" className="tab-content console-tab-wrap"
+                  initial={{ opacity: 0, y: 16 }} animate={{ opacity: 1, y: 0 }}
+                  exit={{ opacity: 0, y: 16 }} transition={{ duration: 0.22, ease: [0.4,0,0.2,1] }}
+                >
+                  <ConsolePanel instanceName={consoleInst} running={running} onSelect={setConsoleInst} />
+                </motion.div>
+
+              ) : activeTab === 'mc' ? (
 
                 /* ─── Minecraft tab ─── */
                 <motion.div key="mc-tab" className="tab-content"

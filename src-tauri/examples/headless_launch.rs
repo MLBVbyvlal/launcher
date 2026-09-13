@@ -120,6 +120,9 @@ async fn proof_body() {
             access_token: "0".to_string(),
             concurrent_downloads: 8,
             max_ram_mb: 2048,
+            java_path: String::new(),
+            jvm_args: String::new(),
+            min_ram_mb: 512,
         },
     )
     .await
