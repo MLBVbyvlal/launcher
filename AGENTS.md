@@ -312,7 +312,8 @@ not accidentally "re-fixed" into a regression.
    `VersionJson` are non-optional — verify against real Mojang JSON before changing their types.
 9. **FIXED 2026-09-12 — updater.** `check_for_update` (`lib.rs`) considers all non-draft
    releases, sorts by semver and returns the newest one newer than `CARGO_PKG_VERSION`;
-   pre-release candidates set `unstable_warning`. Check failures are shown in Settings → About
+   pre-release candidates set `unstable_warning`. Being up to date returns `None` (shown as
+   "up to date"), not an error; real check failures are shown in Settings → About
    (no more silent `.catch(() => {})`).
 10. **FIXED 2026-09-12 — one game process at a time.** `GameState` now holds
     `children: Mutex<HashMap<String, Child>>` and

@@ -508,9 +508,13 @@ async fn check_for_update() -> Result<Option<ReleaseInfo>, String> {
         let vb = parse_semver(b["tag_name"].as_str().unwrap_or(""));
         vb.cmp(&va)
     });
-    let release = candidates.iter()
+    // Being up to date is not an error: both frontend call sites already
+    // treat `null` as "up to date", so return None instead of failing.
+    let Some(release) = candidates.iter()
         .find(|r| parse_semver(r["tag_name"].as_str().unwrap_or("")) > parse_semver(current))
-        .ok_or_else(|| "No releases found".to_string())?;
+    else {
+        return Ok(None);
+    };
 
     let tag = release["tag_name"].as_str().unwrap_or("").to_string();
     let ver = tag.trim_start_matches('v');
