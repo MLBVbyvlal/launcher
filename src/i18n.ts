@@ -101,8 +101,7 @@ const S: Record<Lang, Record<string, string>> = {
     'sidebar.collapse': 'Collapse',
 
     // "Other tab running"
-    'running.lb': 'LiquidBounce is running — switch to LB tab to stop',
-    'running.mc': 'Minecraft is running — switch to MC tab to stop',
+    'running.other': 'Another instance is running: {0}',
     'busy': 'Another game is launching — please wait',
 
     // Settings tabs
@@ -446,8 +445,7 @@ const S: Record<Lang, Record<string, string>> = {
     'sidebar.collapse': 'Свернуть',
 
     // "Other tab running"
-    'running.lb': 'LiquidBounce запущен — перейди во вкладку LB чтобы остановить',
-    'running.mc': 'Minecraft запущен — перейди во вкладку MC чтобы остановить',
+    'running.other': 'Запущен другой инстанс: {0}',
     'busy': 'Запуск уже идёт — подождите',
 
     // Settings tabs

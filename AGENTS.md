@@ -20,10 +20,11 @@ self-update check.
 Facts about the current state:
 
 - **Status: frozen.** Last *release*: `beta0.0.4`, dated 2026-06-14. No feature development;
-  maintenance fixes (security, data integrity, broken updater) were applied on 2026-09-12 —
-  see §6 for what was fixed and what is still open.
+  maintenance fixes (security, data integrity, broken updater) and the launch-pipeline
+  consolidation were applied on 2026-09-12 — see §6 for what was fixed and what is still open.
 - History is squashed and unhelpful (original sprint: 15 commits over two days).
-- ~10 800 lines of first-party code: ~4 560 Rust, ~5 530 TypeScript/CSS.
+- ~9 600 lines of first-party code: ~3 400 Rust, ~6 200 TypeScript/CSS
+  (measured 2026-09-12 after the launch-pipeline consolidation).
 - **No tests, no linter, no formatter config.** CI compiles; it does not verify behaviour.
 - All published releases are marked as GitHub *pre-releases*. The updater now considers them
   (fixed 2026-09-12; see §6, landmine 9).
@@ -32,16 +33,16 @@ Facts about the current state:
 
 | Path | Lines | Role |
 |---|---|---|
-| `src-tauri/src/lib.rs` | ~1180 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mods, download controls, `run()` and the `generate_handler!` list |
-| `src-tauri/src/launcher.rs` | ~3370 | The launch pipelines (`run`, `run_lb`, `run_fabric`, `run_quilt`, `run_forge`, `run_neoforge`), Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
+| `src-tauri/src/lib.rs` | ~1110 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mods, download controls, the single `launch_game` command and the `generate_handler!` list |
+| `src-tauri/src/launcher.rs` | ~2290 | The launch pipeline (`launch` + the loader steps `prepare_loader` / `prepare_loader_stage`), per-instance process registry, Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
 | `src-tauri/src/main.rs` | 6 | Windows entry point. Contains `windows_subsystem` — **do not touch** |
 | `src-tauri/tauri.conf.json` | 40 | Window, bundle targets, CSP, identifier |
 | `src-tauri/capabilities/*.json` | 34 | Tauri v2 permissions for the `main` and `console` windows |
-| `src/App.tsx` | ~2960 | The entire main UI, including every modal |
+| `src/App.tsx` | ~2920 | The entire main UI, including every modal |
 | `src/SetupWizard.tsx` | ~545 | First-run wizard: language → prefs → account → Java |
-| `src/ConsoleWindow.tsx` | ~185 | Separate window that streams game output |
+| `src/ConsoleWindow.tsx` | ~190 | Separate window that streams the output of one instance |
 | `src/LbConfigsPanel.tsx` | ~470 | LiquidBounce configs catalog (GitHub-backed, README sanitized with DOMPurify) |
-| `src/i18n.ts` | ~705 | 518 EN/RU translation keys |
+| `src/i18n.ts` | ~705 | 258 keys per language, 516 total |
 | `src/App.css` | ~1340 | All styling |
 | `src/main.tsx` | 25 | Picks `App` or `ConsoleWindow` by window label |
 | `.github/workflows/ci.yml` | 112 | The only way to compile Rust in a restricted environment (§4) |
@@ -182,8 +183,10 @@ Non-negotiable:
    (`invoke('cmd'` and `invoke("cmd"`) before and after renaming anything.
 3. Look for an existing helper. `launcher.rs` has the download/Java/ZIP helpers; do not introduce
    a second implementation (the six pipelines already suffer from exactly that).
-4. If the change touches the launch flow, remember all six pipelines exist and ask the user whether
-   the fix is meant for one loader or all of them.
+4. If the change touches the launch flow, decide explicitly whether it belongs in the shared
+   pipeline (`launch`, used by every loader) or in a loader step (`prepare_loader`,
+   `prepare_loader_stage`, `download_profile_libraries`, `download_overlay_libraries`,
+   `download_lb_mods`). Anything put in a loader step reaches **one** loader only — say which.
 
 ## 4. How to build and verify
 
@@ -219,7 +222,12 @@ npm run tauri dev  # real desktop app with hot reload
   repositories and container registries may be blocked too. Check what is reachable
   (`curl -s -o /dev/null -w '%{http_code}' <url>`) before promising a build.
 - **CI is the reliable compiler.** Push the workflow to a working branch and let GitHub run
-  `cargo check` and the Windows installer build. Read statuses with
+  `cargo check` and the Windows installer build. When `cargo check` fails, the rust-check job
+  re-emits every compiler diagnostic as a check-run annotation (`Surface compiler errors as
+  annotations` step), so the errors are readable without the log:
+  `gh api repos/<owner>/<repo>/check-runs/<job_id>/annotations --paginate
+  --jq '.[] | "\(.path):\(.start_line) \(.message)"'`.
+  Read statuses with
   `gh run view <id> --json jobs --jq '.jobs[] | "\(.name) \(.conclusion)"'` and per-step detail with
   `gh api repos/<owner>/<repo>/actions/jobs/<job_id> --jq '.steps[] | "\(.conclusion) \(.name)"'`.
   Log bytes and artifacts are served from `*.blob.core.windows.net`, which restricted sandboxes
@@ -279,10 +287,24 @@ not accidentally "re-fixed" into a regression.
 6. **FIXED 2026-09-12 — backend strings are English.** All hardcoded Russian user-visible strings
    in `launcher.rs` were translated to English (the backend has no i18n mechanism). The rule
    remains: any user-visible string added in Rust must be discussed with the user.
-7. **STILL OPEN — six near-identical pipelines** — `run` (`launcher.rs:327`), `run_lb` (`734`),
-   `run_fabric` (`1140`), `run_quilt` (`1484`), `run_forge` (`1801`), `run_neoforge` (`2225`).
-   ~2 000 of 3 370 lines are duplication, and fixes land in some copies only. Consolidate only
-   when asked; if asked, do it as one mechanical change with a diff review.
+7. **FIXED 2026-09-12 — six near-identical pipelines.** There is one pipeline now:
+   `launcher::launch` (`launcher.rs`) does the shared work (manifest, version JSON, client JAR,
+   vanilla libraries, natives, assets, Java, argument building, spawn, exit watch) and the loaders
+   only contribute an overlay: `prepare_loader` resolves what must happen *before* the vanilla
+   download (Fabric/Quilt loader version, Forge/NeoForge installer, LB manifest) and
+   `prepare_loader_stage` what happens after it (profile/overlay libraries, mods) and returns a
+   `LaunchPlan` (`version_name`, `main_class`, extra classpath, overlay JVM/game args, extra
+   substitution variables). `build_launch_args` assembles the command line for every loader, so an
+   argument-order fix cannot land in one loader only. The six `launch_*_game` commands collapsed
+   into one `launch_game(loader, …)`; the frontend has one `invoke` call. **Behaviour changes that
+   came with it** (deliberate, and not runtime-verified — see the caveat below): the client JAR and
+   version JSON are shared-only (no per-instance copy), natives are extracted per instance
+   (`instances/<name>/natives/`, as in PrismLauncher), progress percentages are one schedule for
+   all loaders, and conditional (rule-bearing) loader JVM args are now honoured for Fabric/Quilt
+   too (previously only plain strings were pushed). **Still not parsed:** `arguments.game` in a
+   Fabric/Quilt profile — `FabricArguments` only reads `jvm`, exactly as before the consolidation.
+   Adding it is a two-line change, but neither loader API was reachable from the sandbox to
+   confirm the shape, so it was left alone rather than guessed at.
 8. **FIXED 2026-09-12 — legacy assets.** `AssetIndex` now parses `map_to_resources`, and
    `map_legacy_assets` (called from `download_assets_parallel`) hard-links each object into
    `assets/virtual/legacy/<index key>` for pre-1.7.3 indexes. `assetIndex`/`downloads` in
@@ -291,9 +313,17 @@ not accidentally "re-fixed" into a regression.
    releases, sorts by semver and returns the newest one newer than `CARGO_PKG_VERSION`;
    pre-release candidates set `unstable_warning`. Check failures are shown in Settings → About
    (no more silent `.catch(() => {})`).
-10. **STILL OPEN — one game process at a time.** `GameState` holds a single `child` slot
-    (`launcher.rs:14`); starting a second instance orphans the first from the UI. A fix is a
-    per-instance process registry + frontend changes — needs a design decision and runtime testing.
+10. **FIXED 2026-09-12 — one game process at a time.** `GameState` now holds
+    `children: Mutex<HashMap<String, Child>>` and
+    `jvm_buffers: Mutex<HashMap<String, Arc<Mutex<Vec<String>>>>>`, keyed by instance name, and
+    `watch_exit` polls only its own instance. `stop_game(instance_name)` kills one game;
+    `game-running` and `game-crashed` payloads carry `instance`; `poll_jvm_output` takes
+    `instance_name`; the frontend keeps a `running: string[]` list instead of a single slot. After
+    exit the buffer is trimmed to `JVM_TAIL_AFTER_EXIT` (2 000) lines.
+    **Not runtime-verified** (no Windows machine in the sandbox): launching two instances at once,
+    and the crash dialog for the second one. Still single by design: the download queue and its
+    progress/speed events are global, so only one *launch* runs at a time, and there is still one
+    console window (opening it for another instance closes the previous one).
 11. **FIXED 2026-09-12 — CSP / devtools / Markdown.** CSP is set in `tauri.conf.json`
     (`default-src 'self'`, no inline scripts, fonts from Google Fonts allowed — the page loads
     Inter from fonts.googleapis.com); the `devtools` cargo feature is removed (release builds have
@@ -301,13 +331,16 @@ not accidentally "re-fixed" into a regression.
     `dangerouslySetInnerHTML` (`LbConfigsPanel.tsx` `renderMd`). **Not runtime-verified:** whether
     the configured CSP is also applied to the dev server pages (may degrade Vite fast-refresh in
     `tauri dev`) — smoke-test on Windows after this change.
-12. **FIXED 2026-09-12 — bounded JVM output.** `jvm_lines` is capped at `JVM_LINES_CAP` (20 000)
-    via `jvm_push`; older lines are dropped from the front (full history stays in `latest.log`).
-    The poll-offset protocol degrades gracefully (a stale offset simply reads as "caught up").
+12. **FIXED 2026-09-12 — bounded JVM output.** Each per-instance buffer in `GameState.jvm_buffers`
+    is capped at `JVM_LINES_CAP` (20 000) via `jvm_push`; older lines are dropped from the front
+    (full history stays in `latest.log`). The poll-offset protocol degrades gracefully (a stale
+    offset simply reads as "caught up"), and polling an instance that was never launched returns an
+    empty page instead of failing.
 
 ### Dead code — do not assume it is wired up
 
-As of 2026-09-12: `check_version_installed` and `poll_console` were removed (never invoked);
+As of 2026-09-12: `check_version_installed`, `poll_console` and the five extra
+`launch_*_game` commands were removed;
 `scan_instances` / `save_instance_metadata` are now called from `App.tsx`. `public/vite.svg` is
 the favicon (in use — do not delete); `public/tauri.svg` and `src/assets/react.svg` were removed
 as unused template leftovers. If you add a command, invoke it or do not add it.

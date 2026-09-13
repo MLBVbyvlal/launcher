@@ -65,7 +65,29 @@ jobs:
 
       - name: cargo check --locked --all-targets
         working-directory: src-tauri
-        run: cargo check --locked --all-targets
+        run: |
+          set +e
+          cargo check --locked --all-targets --message-format=json > /tmp/check.json 2> /tmp/check.err
+          code=$?
+          set -e
+          exit $code
+
+      # Raw job logs live on *.blob.core.windows.net, which restricted sandboxes
+      # cannot reach; annotations are served from api.github.com instead, so a
+      # failing compile stays readable without downloading the log.
+      - name: Surface compiler errors as annotations
+        if: failure()
+        run: |
+          jq -r 'select(.reason=="compiler-message") | .message | select(.level=="error")
+                 | (.spans[0] // {}) as $s
+                 | "::error file=src-tauri/\($s.file_name // "src/main.rs"),line=\($s.line_start // 1),col=\($s.column_start // 1)::\(.message | gsub("%";"%25") | gsub("[\r\n]+";" ") | .[0:400])"' \
+            /tmp/check.json | head -60
+          {
+            echo '### cargo check — last lines of stderr'
+            echo '```'
+            tail -60 /tmp/check.err
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
   # ── 3. Real Windows installer — the artifact that actually ships ───────────
   build-windows:

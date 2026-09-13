@@ -81,12 +81,15 @@ export default function ConsoleWindow() {
     return () => clearInterval(id)
   }, []) // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Stream JVM output via in-memory buffer (no file dependency)
+  // Stream JVM output via in-memory buffer (no file dependency).
+  // Buffers are per instance, so polling starts once the instance is known.
   useEffect(() => {
+    if (!info) return
     const id = setInterval(async () => {
       try {
         const result = await invoke<JvmPollResult>('poll_jvm_output', {
           offset: offsetRef.current,
+          instanceName: info.instance_name,
         })
         if (result.cleared) {
           linesRef.current = []
@@ -101,7 +104,7 @@ export default function ConsoleWindow() {
       } catch { /* ignore */ }
     }, 200)
     return () => clearInterval(id)
-  }, [])
+  }, [info])
 
   // Auto-scroll to bottom when new lines arrive
   useEffect(() => {

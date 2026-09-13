@@ -74,7 +74,8 @@ work. Issues and pull requests may go unanswered.
 - Downloads stream to disk (a `.part` file that is renamed on success) and are verified against
   the manifest size and SHA-1 when the manifest provides one.
 - Progress is reported per stage (client JAR, libraries, assets, Java, launch).
-- Shared cache: libraries, assets and version JARs are downloaded once and reused across instances.
+- Shared cache: libraries, assets, version JSONs and version JARs are downloaded once and reused
+  across instances; only the extracted natives are per instance.
 - Pre-1.7.3 asset indexes (`map_to_resources`) are mapped into `assets/virtual/legacy/` so old
   versions start with their textures and sounds.
 
@@ -91,7 +92,7 @@ work. Issues and pull requests may go unanswered.
 - Crash dialog with the last 80 lines of output when the game exits with a non-zero code.
 - Accent colour theming (8 presets + custom hex), collapsible sidebar, swipe between the Minecraft
   and LiquidBounce tabs, hide-launcher-on-launch.
-- English and Russian UI (514 translation keys).
+- English and Russian UI (258 keys per language).
 
 ---
 
@@ -148,7 +149,7 @@ directory. The launcher keeps its own tree:
 | `mlbv\shared\libraries\` | Maven libraries, shared by all instances |
 | `mlbv\shared\versions\` | Version JSONs and client JARs |
 | `mlbv\shared\java\jre-{N}\` | Java runtimes installed by the launcher |
-| `mlbv\instances\{name}\` | The game directory of one instance (mods, configs, saves, logs) |
+| `mlbv\instances\{name}\` | The game directory of one instance (mods, configs, saves, logs, extracted natives) |
 
 Accounts, tokens and the instance list are stored in the WebView's `localStorage`
 (`%APPDATA%\com.vlal.mlbv\` on Windows). They are per-machine, never synced or exported — and,
@@ -162,8 +163,9 @@ src-tauri/
   src/main.rs       Windows entry point (windows_subsystem attribute — keep it)
   src/lib.rs        Tauri commands: Microsoft auth, LiquidBounce API, update check,
                     console window, instance scanning, mods, download controls
-  src/launcher.rs   Launch pipelines for vanilla / LiquidBounce / Fabric / Quilt /
-                    Forge / NeoForge, Java provisioning, ZIP extraction, helpers
+  src/launcher.rs   One launch pipeline with per-loader steps (vanilla / LiquidBounce /
+                    Fabric / Quilt / Forge / NeoForge), the per-instance process
+                    registry, Java provisioning, ZIP extraction, helpers
   tauri.conf.json   Window config, bundle targets, identifier (com.vlal.mlbv)
   capabilities/     Tauri v2 permission sets for the main and console windows
 src/
@@ -202,8 +204,10 @@ Verified against the code, not guessed:
    GitHub releases and offers the newest one that is newer than the running build; candidates marked
    pre-release are shown with a warning. Check failures are no longer swallowed silently — they are
    shown in Settings → About.
-2. **One game process at a time.** The backend keeps a single `child` slot, so launching a second
-   instance stops tracking the first.
+2. **One launch at a time.** Several instances can run side by side, but the download queue and its
+   progress/speed events are global, so a second *launch* is refused ("Another game is launching")
+   until the first one has started. There is also a single console window: opening it for another
+   instance closes the previous one.
 3. **No tests and no linter.** CI compiles the project; it does not verify behaviour.
 4. **Instance recovery is name-based.** If a `.mlbv-instance.json` metadata file is missing or
    corrupt, a recovered instance falls back to a filesystem guess (LiquidBounce instances lose their

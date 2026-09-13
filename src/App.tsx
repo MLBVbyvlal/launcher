@@ -1686,7 +1686,8 @@ export default function App() {
   const [showSettings, setShowSettings]       = useState(false)
   const [launching, setLaunching]             = useState(false)
   const [launchingTab, setLaunchingTab]       = useState<Tab | null>(null)
-  const [gameRunning, setGameRunning]         = useState<Tab | null>(null)
+  // Instances with a live game process. Several may run at the same time.
+  const [running, setRunning]                 = useState<string[]>([])
   const [stopWarn, setStopWarn]               = useState(false)
   const [stopCd, setStopCd]                   = useState(5)
   const stopCdRef = useRef<ReturnType<typeof setInterval> | null>(null)
@@ -1740,6 +1741,9 @@ export default function App() {
   const activeMcInst = mcInstances.find(i => i.id === activeMcInstId) ?? mcInstances[0] ?? null
   const activeLbInst = lbInstances.find(i => i.id === activeLbInstId) ?? lbInstances[0] ?? null
   const activeInstance = activeTab === 'mc' ? activeMcInst : activeLbInst
+  // The button belongs to the selected instance: it stops that one only.
+  const runningActive = !!activeInstance && running.includes(activeInstance.name)
+  const runningOther  = running.find(name => name !== activeInstance?.name)
   const tabInstances = activeTab === 'mc' ? mcInstances : lbInstances
   const otherInstances = tabInstances.filter(i => i.id !== activeInstance?.id)
 
@@ -1894,14 +1898,15 @@ export default function App() {
     let unlistenRunning: (() => void) | null = null
     let unlistenCrash:   (() => void) | null = null
     let unlistenSpeed:   (() => void) | null = null
-    listen<boolean>('game-running', e => {
-      if (!e.payload) {
-        setGameRunning(null)
-        getCurrentWindow().show().catch(() => {})
-      }
+    listen<{ instance: string; running: boolean }>('game-running', e => {
+      const { instance, running: isRunning } = e.payload
+      setRunning(prev => isRunning
+        ? (prev.includes(instance) ? prev : [...prev, instance])
+        : prev.filter(n => n !== instance))
+      if (!isRunning) getCurrentWindow().show().catch(() => {})
     }).then(fn => { unlistenRunning = fn })
-    listen<CrashInfo>('game-crashed', e => {
-      setCrashInfo({ ...e.payload, instanceName: lastLaunchedInst.current?.name })
+    listen<CrashInfo & { instance?: string }>('game-crashed', e => {
+      setCrashInfo({ ...e.payload, instanceName: e.payload.instance ?? lastLaunchedInst.current?.name })
     }).then(fn => { unlistenCrash = fn })
     listen<{ bps: number }>('download-speed', e => {
       setDlSpeedBps(e.payload.bps)
@@ -1931,8 +1936,8 @@ export default function App() {
   const confirmStop = async () => {
     if (stopCdRef.current) { clearInterval(stopCdRef.current); stopCdRef.current = null }
     setStopWarn(false)
-    if (!isTauri) return
-    try { await invoke('stop_game') } catch {}
+    if (!isTauri || !activeInstance) return
+    try { await invoke('stop_game', { instanceName: activeInstance.name }) } catch {}
   }
 
   // ── Download controls ─────────────────────────────────────────────────────
@@ -1955,7 +1960,7 @@ export default function App() {
       setTimeout(() => setBusyFlash(null), 900)
       return
     }
-    if (gameRunning !== null) return
+    if (running.includes(activeInstance.name)) return
     const instTab: Tab = activeInstance.type === 'lb' ? 'lb' : 'mc'
     setLaunching(true); setLaunchingTab(instTab)
     setLaunchError(false); setProgress(0); setStatus('Preparing…')
@@ -2080,44 +2085,19 @@ export default function App() {
         if (showConsole) {
           invoke('open_console_window', { instanceName: resolvedInst.name }).catch(() => {})
         }
-        if (resolvedInst.type === 'lb' && resolvedInst.buildId) {
-          await invoke('launch_lb_game', {
-            buildId: resolvedInst.buildId,
-            mcVersion: resolvedInst.mcVersion,
-            ...baseArgs,
-          })
-        } else if (resolvedInst.loader === 'fabric') {
-          await invoke('launch_fabric_game', {
-            versionId: resolvedInst.mcVersion,
-            loaderVersion: resolvedInst.loaderVersion ?? '',
-            ...baseArgs,
-          })
-        } else if (resolvedInst.loader === 'quilt') {
-          await invoke('launch_quilt_game', {
-            versionId: resolvedInst.mcVersion,
-            loaderVersion: resolvedInst.loaderVersion ?? '',
-            ...baseArgs,
-          })
-        } else if (resolvedInst.loader === 'forge') {
-          await invoke('launch_forge_game', {
-            versionId: resolvedInst.mcVersion,
-            forgeVersion: resolvedInst.loaderVersion ?? '',
-            ...baseArgs,
-          })
-        } else if (resolvedInst.loader === 'neoforge') {
-          await invoke('launch_neoforge_game', {
-            versionId: resolvedInst.mcVersion,
-            neoforgeVersion: resolvedInst.loaderVersion ?? '',
-            ...baseArgs,
-          })
-        } else {
-          await invoke('launch_game', {
-            versionId: resolvedInst.mcVersion,
-            ...baseArgs,
-          })
-        }
+        // A single command serves every loader; the backend picks the pipeline.
+        const loader = resolvedInst.type === 'lb'
+          ? 'liquidbounce'
+          : (resolvedInst.loader ?? 'vanilla')
+        await invoke('launch_game', {
+          loader,
+          mcVersion: resolvedInst.mcVersion,
+          loaderVersion: resolvedInst.loaderVersion ?? '',
+          lbBuildId: resolvedInst.buildId ?? 0,
+          ...baseArgs,
+        })
         setProgress(100); setStatus('Launched!')
-        setGameRunning(instTab)
+        setRunning(prev => prev.includes(resolvedInst.name) ? prev : [...prev, resolvedInst.name])
         if (localStorage.getItem('mlbv_close_on_launch') === '1') getCurrentWindow().hide().catch(() => {})
         await tick(1500)
       } catch (err) {
@@ -2504,7 +2484,7 @@ export default function App() {
                         >
                           <div className="progress-label">{t('busy')}</div>
                         </motion.div>
-                      ) : gameRunning === 'mc' ? (
+                      ) : runningActive ? (
                         <motion.button key="stop-mc" className="stop-btn"
                           onClick={handleStop}
                           initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -2514,16 +2494,6 @@ export default function App() {
                         >
                           <span className="stop-icon">■</span> {t('stop')}
                         </motion.button>
-                      ) : gameRunning === 'lb' ? (
-                        <motion.div key="lb-running-mc" className="progress-wrap glass other-running-wrap"
-                          initial={{ opacity: 0, scale: 0.92 }} animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.92 }} transition={spring}
-                        >
-                          <div className="progress-label other-running-label">
-                            <span className="other-running-icon">■</span>
-                            {t('running.lb')}
-                          </div>
-                        </motion.div>
                       ) : (
                         <motion.button key="play"
                           className={`play-btn${!selected || !activeInstance ? ' off' : ''}`}
@@ -2541,9 +2511,12 @@ export default function App() {
                     </AnimatePresence>
                     {!launching && selected && activeInstance && (
                       <motion.div className="hint-text" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}>
-                        {gameRunning === 'mc'
+                        {runningActive
                           ? <>{t('status.running')} · <strong style={{ color: 'var(--accent)' }}>{selected.username}</strong></>
-                          : <>{t('status.playing_as')} <strong style={{ color: 'var(--accent)' }}>{selected.username}</strong> · {activeInstance.mcVersion}</>
+                          : <>
+                              {t('status.playing_as')} <strong style={{ color: 'var(--accent)' }}>{selected.username}</strong> · {activeInstance.mcVersion}
+                              {runningOther && <> · <span className="other-running-label">{t('running.other').replace('{0}', runningOther)}</span></>}
+                            </>
                         }
                       </motion.div>
                     )}
@@ -2609,7 +2582,7 @@ export default function App() {
                         >
                           <div className="progress-label">{t('busy')}</div>
                         </motion.div>
-                      ) : gameRunning === 'lb' ? (
+                      ) : runningActive ? (
                         <motion.button key="stop-lb" className="stop-btn lb-stop"
                           onClick={handleStop}
                           initial={{ opacity: 0, y: 20, scale: 0.95 }} animate={{ opacity: 1, y: 0, scale: 1 }}
@@ -2619,16 +2592,6 @@ export default function App() {
                         >
                           <span className="stop-icon">■</span> {t('stop')}
                         </motion.button>
-                      ) : gameRunning === 'mc' ? (
-                        <motion.div key="mc-running-lb" className="progress-wrap glass other-running-wrap"
-                          initial={{ opacity: 0, scale: 0.92 }} animate={{ opacity: 1, scale: 1 }}
-                          exit={{ opacity: 0, scale: 0.92 }} transition={spring}
-                        >
-                          <div className="progress-label other-running-label">
-                            <span className="other-running-icon">■</span>
-                            {t('running.mc')}
-                          </div>
-                        </motion.div>
                       ) : (
                         <motion.button key="play-lb"
                           className={`play-btn lb-play${!selected || !activeInstance ? ' off' : ''}`}
@@ -2646,9 +2609,12 @@ export default function App() {
                     </AnimatePresence>
                     {!launching && selected && activeInstance && (
                       <motion.div className="hint-text lb-hint" initial={{ opacity: 0 }} animate={{ opacity: 1 }} transition={{ delay: 0.35 }}>
-                        {gameRunning === 'lb'
+                        {runningActive
                           ? <>{t('status.running')} · <strong style={{ color: 'var(--lb-accent)' }}>{selected.username}</strong></>
-                          : <><strong style={{ color: 'var(--lb-accent)' }}>{selected.username}</strong> · {activeInstance.name} (MC {activeInstance.mcVersion})</>
+                          : <>
+                              <strong style={{ color: 'var(--lb-accent)' }}>{selected.username}</strong> · {activeInstance.name} (MC {activeInstance.mcVersion})
+                              {runningOther && <> · <span className="other-running-label">{t('running.other').replace('{0}', runningOther)}</span></>}
+                            </>
                         }
                       </motion.div>
                     )}
