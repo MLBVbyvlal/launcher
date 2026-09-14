@@ -85,7 +85,20 @@ jobs:
       # build here rather than piling up in the log.
       - name: cargo clippy --locked --all-targets -- -D warnings
         working-directory: src-tauri
-        run: cargo clippy --locked --all-targets -- -D warnings
+        run: |
+          set +e
+          cargo clippy --locked --all-targets --message-format=json -- -D warnings > /tmp/clippy.json 2> /tmp/clippy.err
+          code=$?
+          set -e
+          exit $code
+
+      - name: Surface clippy findings as annotations
+        if: failure()
+        run: |
+          jq -r 'select(.reason=="compiler-message") | .message | select(.level=="error" or .level=="warning")
+                 | (.spans[0] // {}) as $s
+                 | "::\(.level) file=src-tauri/\($s.file_name // "src/main.rs"),line=\($s.line_start // 1),col=\($s.column_start // 1)::\(.message | gsub("%";"%25") | gsub("[\r\n]+";" ") | .[0:400])"' \
+            /tmp/clippy.json 2>/dev/null | head -80 || true
 
       # Raw job logs live on *.blob.core.windows.net, which restricted sandboxes
       # cannot reach; annotations are served from api.github.com instead, so a
