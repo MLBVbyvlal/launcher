@@ -2,7 +2,7 @@
 //! version JSONs (Forge/NeoForge), and the Modrinth mod fetch they share.
 use super::*;
 use anyhow::{anyhow, Context, Result};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::AtomicU64;
 
 /// Fetch a Fabric/Quilt loader profile (a version-JSON overlay).
@@ -82,7 +82,7 @@ pub(super) enum OverlayLib {
     Cached { path: PathBuf },
 }
 
-pub(super) fn classify_overlay_lib(lib_val: &serde_json::Value, libs_dir: &PathBuf) -> OverlayLib {
+pub(super) fn classify_overlay_lib(lib_val: &serde_json::Value, libs_dir: &Path) -> OverlayLib {
     let name = lib_val["name"].as_str().unwrap_or("");
     if name.is_empty() { return OverlayLib::Skip; }
     // Overlay rules use the same Mojang semantics as vanilla libraries.
@@ -121,7 +121,7 @@ pub(super) fn classify_overlay_lib(lib_val: &serde_json::Value, libs_dir: &PathB
 /// A cached Forge/NeoForge install that fails this check is re-installed
 /// instead of trusted: launching with a partial classpath crashes the game
 /// with a confusing error.
-pub(super) fn overlay_cache_complete(json: &serde_json::Value, libs_dir: &PathBuf) -> bool {
+pub(super) fn overlay_cache_complete(json: &serde_json::Value, libs_dir: &Path) -> bool {
     let Some(libs) = json["libraries"].as_array() else { return true };
     libs.iter().all(|lib| match classify_overlay_lib(lib, libs_dir) {
         OverlayLib::Skip => true,
@@ -136,7 +136,7 @@ pub(super) fn overlay_cache_complete(json: &serde_json::Value, libs_dir: &PathBu
 pub(super) async fn download_overlay_libraries(
     ctx: &Ctx<'_>,
     json: &serde_json::Value,
-    libs_dir: &PathBuf,
+    libs_dir: &Path,
     kind: &str,
     ver_name: &str,
     concurrent: u32,
@@ -196,7 +196,7 @@ pub(super) async fn download_modrinth_mod(
     client: &reqwest::Client,
     slug: &str,
     mc_ver: &str,
-    mods_dir: &PathBuf,
+    mods_dir: &Path,
     loader: &str,
     bytes_dl: Option<&AtomicU64>,
 ) {

@@ -5,7 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 
 mod lb;
 mod overlay;
@@ -282,7 +282,7 @@ pub(super) async fn prepare_loader_stage(
     req: &LaunchRequest,
     prep: &LoaderPrep,
     mc_ver: &str,
-    libs_dir: &PathBuf,
+    libs_dir: &Path,
 ) -> Result<LaunchPlan> {
     match prep {
         LoaderPrep::Nothing => Ok(LaunchPlan {

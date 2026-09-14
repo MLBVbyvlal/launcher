@@ -7,7 +7,7 @@ use anyhow::{anyhow, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 
 /// Access tokens live ~24 h; refresh a little earlier so a launch never
@@ -99,12 +99,12 @@ fn write_vault(map: &HashMap<String, StoredTokens>) -> Result<()> {
 }
 
 #[cfg(unix)]
-fn restrict_permissions(path: &PathBuf) {
+fn restrict_permissions(path: &Path) {
     use std::os::unix::fs::PermissionsExt;
     let _ = fs::set_permissions(path, fs::Permissions::from_mode(0o600));
 }
 #[cfg(not(unix))]
-fn restrict_permissions(_path: &PathBuf) {}
+fn restrict_permissions(_path: &Path) {}
 
 // ─── DPAPI (Windows) ──────────────────────────────────────────────────────────
 

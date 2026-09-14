@@ -3,7 +3,7 @@
 use super::*;
 use anyhow::{anyhow, Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -139,7 +139,7 @@ pub(super) async fn download_lb_mod_webview(
     app: &tauri::AppHandle,
     instance: &str,
     queue_url: &str,
-    dest: &PathBuf,
+    dest: &Path,
 ) -> Result<()> {
     // Close any stale window from a previous attempt
     if let Some(old) = app.get_webview_window("lb-dl") {
@@ -259,7 +259,7 @@ pub(super) async fn download_lb_mod_webview(
 }
 
 /// Extract the first .jar found inside a ZIP archive.
-pub(super) fn extract_jar_from_zip(zip_bytes: &[u8], dest: &PathBuf) -> Result<()> {
+pub(super) fn extract_jar_from_zip(zip_bytes: &[u8], dest: &Path) -> Result<()> {
     use std::io::Read;
     let cursor = std::io::Cursor::new(zip_bytes);
     let mut archive = zip::ZipArchive::new(cursor)?;

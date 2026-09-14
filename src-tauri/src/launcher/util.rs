@@ -30,7 +30,7 @@ pub fn mc_dir() -> PathBuf {
 /// Size check for already-cached files. Fresh downloads are verified with
 /// SHA-1 in `download_file`; cached files are trusted by size (re-downloading
 /// every cached file to re-hash it on each launch would cost bandwidth).
-pub(super) fn is_valid_file(path: &PathBuf, expected_size: u64) -> bool {
+pub(super) fn is_valid_file(path: &Path, expected_size: u64) -> bool {
     if expected_size == 0 { return path.exists(); }
     match fs::metadata(path) {
         Ok(m) => m.len() == expected_size,
@@ -47,7 +47,7 @@ pub(super) fn is_valid_file(path: &PathBuf, expected_size: u64) -> bool {
 pub(super) async fn download_file(
     client: &reqwest::Client,
     url: &str,
-    path: &PathBuf,
+    path: &Path,
     expected_size: u64,
     expected_sha1: Option<&str>,
     bytes_dl: Option<&AtomicU64>,
@@ -103,7 +103,7 @@ pub(super) async fn download_file(
 /// also be reachable at `assets/virtual/legacy/<index key>` — without this the
 /// old versions start without textures or sounds. Hard links (same volume,
 /// zero extra space), falling back to a copy.
-pub(super) fn map_legacy_assets(objects: &HashMap<String, AssetObj>, objs_dir: &PathBuf) -> Result<()> {
+pub(super) fn map_legacy_assets(objects: &HashMap<String, AssetObj>, objs_dir: &Path) -> Result<()> {
     let Some(assets_root) = objs_dir.parent() else { return Ok(()) };
     let legacy_dir = assets_root.join("virtual").join("legacy");
     for (path, obj) in objects {
@@ -132,7 +132,7 @@ pub(super) fn zip_entry_path(dest: &Path, name: &str) -> Option<PathBuf> {
     Some(out)
 }
 
-pub(super) fn extract_natives(zip_path: &PathBuf, dest: &PathBuf) -> Result<()> {
+pub(super) fn extract_natives(zip_path: &Path, dest: &Path) -> Result<()> {
     let file = fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     for i in 0..archive.len() {

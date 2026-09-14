@@ -2,7 +2,7 @@
 use super::*;
 use anyhow::{anyhow, Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU64, Ordering};
 
 mod provision;
@@ -18,7 +18,7 @@ pub fn folder_java_major(name: &str) -> Option<u32> {
         .find(|&n| n >= 8)
 }
 
-pub fn find_java_exe_recursive(dir: &PathBuf, exe: &str) -> Option<PathBuf> {
+pub fn find_java_exe_recursive(dir: &Path, exe: &str) -> Option<PathBuf> {
     let Ok(entries) = fs::read_dir(dir) else { return None };
     let mut subdirs = vec![];
     for entry in entries.flatten() {
@@ -37,7 +37,7 @@ pub fn find_java_exe_recursive(dir: &PathBuf, exe: &str) -> Option<PathBuf> {
     None
 }
 
-pub(super) fn find_java(root: &PathBuf, req: Option<&JavaVersionReq>) -> Option<PathBuf> {
+pub(super) fn find_java(root: &Path, req: Option<&JavaVersionReq>) -> Option<PathBuf> {
     let exe = if cfg!(windows) { "javaw.exe" } else { "java" };
     let req_major = req.map(|r| r.major_version);
 
@@ -162,7 +162,7 @@ pub(super) fn find_java(root: &PathBuf, req: Option<&JavaVersionReq>) -> Option<
 pub(super) async fn ensure_java(
     app: &tauri::AppHandle,
     client: &reqwest::Client,
-    shared_dir: &PathBuf,
+    shared_dir: &Path,
     req: Option<&JavaVersionReq>,
     java_override: Option<&str>,
     ctx: Option<&Ctx<'_>>,

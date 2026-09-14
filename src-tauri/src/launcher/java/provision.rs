@@ -2,10 +2,10 @@
 use super::*;
 use anyhow::{anyhow, Context, Result};
 use std::fs;
-use std::path::PathBuf;
+use std::path::Path;
 use tauri::Emitter;
 
-pub(super) fn extract_zip_all(zip_path: &PathBuf, dest: &PathBuf) -> Result<()> {
+pub(super) fn extract_zip_all(zip_path: &Path, dest: &Path) -> Result<()> {
     let file = fs::File::open(zip_path)?;
     let mut archive = zip::ZipArchive::new(file)?;
     for i in 0..archive.len() {
@@ -42,11 +42,9 @@ pub async fn download_java_major(app: &tauri::AppHandle, major: u32) -> Result<(
     // Only check MLBV's own managed Java — system Java (even Java 25) must not
     // satisfy this check, because v >= r in find_java would skip all downloads.
     let java_dir = shared_dir.join("java").join(format!("jre-{major}"));
-    if java_dir.exists() {
-        if find_java_exe_recursive(&java_dir, exe).is_some() {
-            emit("already", 100.0, "");
-            return Ok(());
-        }
+    if java_dir.exists() && find_java_exe_recursive(&java_dir, exe).is_some() {
+        emit("already", 100.0, "");
+        return Ok(());
     }
 
     emit("downloading", 0.0, "Connecting…");

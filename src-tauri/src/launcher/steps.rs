@@ -93,8 +93,8 @@ pub(super) async fn download_libs_parallel(
 pub(super) async fn download_vanilla_libraries(
     ctx: &Ctx<'_>,
     ver: &VersionJson,
-    libs_dir: &PathBuf,
-    natives_dir: &PathBuf,
+    libs_dir: &Path,
+    natives_dir: &Path,
     concurrent: u32,
 ) -> Result<Vec<String>> {
     // Plan first: every file to fetch, plus the ordered classpath entries.
@@ -271,7 +271,7 @@ pub(super) fn build_launch_args(
 pub(super) async fn download_assets_parallel(
     ctx: &Ctx<'_>,
     objects: &HashMap<String, AssetObj>,
-    objs_dir: &PathBuf,
+    objs_dir: &Path,
     concurrent: u32,
     pct_start: f32,
     pct_range: f32,
