@@ -2,8 +2,8 @@
 //!
 //! PrismLauncher is the reference UX this mirrors: search either platform
 //! from inside the launcher, pick a file built for the instance's MC version
-//! + loader, install it, and later check every installed mod for updates in
-//! one click. Two deliberate divergences:
+//! and loader, install it, and later check every installed mod for updates
+//! in one click. Two deliberate divergences:
 //!
 //! - CurseForge needs the user's own API key (Settings → General). Prism
 //!   ships an official project key from Overwolf; we have none, so the key
@@ -423,7 +423,7 @@ pub async fn check_mod_updates(
             out.push(u);
         }
     }
-    out.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+    out.sort_by_key(|m| m.name.to_lowercase());
     Ok(out)
 }
 

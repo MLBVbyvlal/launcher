@@ -82,7 +82,7 @@ fn read_vault() -> Result<HashMap<String, StoredTokens>> {
     if !path.exists() { return Ok(HashMap::new()); }
     let raw = fs::read(&path).context("Reading account vault")?;
     let plain = unprotect(&raw).context("Decrypting account vault")?;
-    Ok(serde_json::from_slice(&plain).context("Parsing account vault")?)
+    serde_json::from_slice(&plain).context("Parsing account vault")
 }
 
 fn write_vault(map: &HashMap<String, StoredTokens>) -> Result<()> {

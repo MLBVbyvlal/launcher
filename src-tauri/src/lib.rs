@@ -51,6 +51,9 @@ fn get_game_dir() -> String {
 /// `loader_version` / `lb_build_id` carry what that loader needs.
 /// `loader_version` is the Fabric/Quilt loader version or the full
 /// Forge/NeoForge version; an empty string means "pick the newest stable".
+// The IPC boundary mirrors the frontend's flat camelCase invoke object; a
+// struct here would change the wire shape for no runtime gain.
+#[allow(clippy::too_many_arguments)]
 #[tauri::command]
 async fn launch_game(
     app: tauri::AppHandle,
