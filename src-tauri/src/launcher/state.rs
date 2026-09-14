@@ -19,6 +19,10 @@ pub struct GameState {
     /// instances of the same version never race on the same `.part` files.
     pub version_locks: Mutex<HashMap<String, Arc<tokio::sync::Mutex<()>>>>,
 }
+impl Default for GameState {
+    fn default() -> Self { Self::new() }
+}
+
 impl GameState {
     pub fn new() -> Self {
         GameState {

@@ -66,7 +66,7 @@ pub(super) async fn download_libs_parallel(
                     job.sha1.as_deref(), Some(&ctl_c.bytes)).await
                 .map_err(|e| format!("Downloading {}: {e:#}", job.label));
             let n = done_c.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % 8 == 0 || n == total {
+            if n.is_multiple_of(8) || n == total {
                 let pct = pct_start + (n as f32 / total as f32) * pct_range;
                 progress(&app_c, &inst_c, "download", pct, &format!("{stage_c} ({n}/{total})…"));
             }
@@ -186,7 +186,7 @@ pub(super) fn push_json_args(
         match v {
             serde_json::Value::String(s) => out.push(replace(s)),
             serde_json::Value::Object(_) => {
-                let allowed = v["rules"].as_array().map_or(true, |rs| rs.iter().any(|r| {
+                let allowed = v["rules"].as_array().is_none_or(|rs| rs.iter().any(|r| {
                     r["action"].as_str() == Some("allow") && {
                         let os_name = r["os"]["name"].as_str().unwrap_or("");
                         os_name.is_empty()
@@ -320,7 +320,7 @@ pub(super) async fn download_assets_parallel(
                 let _ = download_file(&client_c, &url, &obj_path, size, Some(&hash), Some(&ctl_c.bytes)).await;
             }
             let n = done_c.fetch_add(1, Ordering::Relaxed) + 1;
-            if n % 50 == 0 || n == total {
+            if n.is_multiple_of(50) || n == total {
                 let pct = pct_start + (n as f32 / total as f32) * pct_range;
                 progress(&app_c, &inst_c, "download", pct, &format!("Assets ({n}/{total})…"));
             }

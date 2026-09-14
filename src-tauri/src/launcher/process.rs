@@ -31,7 +31,9 @@ pub(super) fn pipe_lines<R: std::io::Read + Send + 'static>(stream: Option<R>, b
     let Some(stream) = stream else { return };
     std::thread::spawn(move || {
         use std::io::BufRead;
-        std::io::BufReader::new(stream).lines().flatten().for_each(|l| jvm_push(&buf, l));
+        // `map_while(Result::ok)` stops at the first read error (pipe closed) instead
+        // of spinning on a stream that keeps failing.
+        std::io::BufReader::new(stream).lines().map_while(Result::ok).for_each(|l| jvm_push(&buf, l));
     });
 }
 
@@ -82,10 +84,7 @@ pub(super) fn watch_exit(app: tauri::AppHandle, instance: String, game_dir: Path
                 let state = app.state::<GameState>();
                 let mut children = state.children.lock().unwrap();
                 match children.get_mut(&instance) {
-                    Some(child) => match child.try_wait() {
-                        Ok(status) => status,
-                        Err(_) => None,
-                    },
+                    Some(child) => child.try_wait().unwrap_or_default(),
                     // Removed by stop_game — it emits its own event.
                     None => return,
                 }

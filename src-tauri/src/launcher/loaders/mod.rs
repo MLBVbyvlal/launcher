@@ -257,7 +257,7 @@ pub(super) async fn run_loader_installer(
             .ok()
             .and_then(|rd| rd.flatten().find(|e| {
                 let n = e.file_name().to_string_lossy().into_owned();
-                n.contains(&hint) && mc_fit.as_deref().map_or(true, |mc| n.contains(mc))
+                n.contains(&hint) && mc_fit.as_deref().is_none_or(|mc| n.contains(mc))
             }))
             .map(|e| e.file_name().to_string_lossy().into_owned());
         if let Some(actual_name) = found {
