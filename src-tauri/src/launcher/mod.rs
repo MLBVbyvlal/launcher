@@ -24,7 +24,8 @@ mod steps;
 mod types;
 mod util;
 
-pub use java::{download_java_major, ensure_java, find_java_exe_recursive, folder_java_major, scan_java_installs};
+pub use java::{download_java_major, find_java_exe_recursive, folder_java_major, scan_java_installs};
+use java::ensure_java;
 pub use util::mc_dir;
 use loaders::{prepare_loader, prepare_loader_stage, LbManifest};
 use process::spawn_game;

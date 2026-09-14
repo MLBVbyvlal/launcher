@@ -1,6 +1,5 @@
 //! Mojang launcher-meta JSON shapes (version manifest, version JSON, asset
 //! index). Field names follow the upstream JSON.
-use super::*;
 use serde::Deserialize;
 use std::collections::HashMap;
 
@@ -19,7 +18,6 @@ pub(super) struct ManifestEntry {
 
 #[derive(Deserialize)]
 pub(super) struct VersionJson {
-    pub(super) id: String,
     #[serde(rename = "mainClass")]
     pub(super) main_class: String,
     // Pre-1.13 style

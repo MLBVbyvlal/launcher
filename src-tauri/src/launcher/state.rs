@@ -1,6 +1,5 @@
 //! Per-process game state: running children, per-instance download controls,
 //! JVM output buffers, and the RAII guards the pipeline uses.
-use super::*;
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicBool, AtomicU64};

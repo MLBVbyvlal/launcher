@@ -159,7 +159,7 @@ pub(super) fn find_java(root: &PathBuf, req: Option<&JavaVersionReq>) -> Option<
     None
 }
 
-pub async fn ensure_java(
+pub(super) async fn ensure_java(
     app: &tauri::AppHandle,
     client: &reqwest::Client,
     shared_dir: &PathBuf,

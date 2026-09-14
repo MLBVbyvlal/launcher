@@ -26,8 +26,6 @@ pub(super) struct LbManifest {
 
 #[derive(Deserialize)]
 pub(super) struct LbManifestBuild {
-    pub(super) mc_version: String,
-    pub(super) lb_version: String,
     pub(super) fabric_loader_version: String,
 }
 
