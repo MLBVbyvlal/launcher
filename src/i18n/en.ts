@@ -171,6 +171,7 @@ const en: Record<string, string> = {
   'settings.danger_item5': 'All launcher settings (RAM, downloads, preferences)',
   'settings.danger_wait': 'Please wait {0}s before confirming…',
   'settings.danger_confirm_hint': 'You may now confirm the deletion.',
+  'settings.danger_busy': 'A download is running for: {0}. Cancel it in the launch card first — wiping the data folder mid-download leaves a half-installed version.',
   'settings.cancel': 'Cancel',
   'settings.deleting': 'Deleting…',
   'settings.confirm_delete': 'Confirm Delete',
@@ -245,6 +246,16 @@ const en: Record<string, string> = {
   'acct.ms_loading': 'Complete sign-in in the popup…',
   'acct.ms_note_loading': 'Complete login in the browser window that opened',
   'acct.ms_note': 'Requires a purchased Minecraft license',
+  // Removal is destructive in one way the rest of the list is not: for a
+  // Microsoft account it also deletes the vault entry on this machine.
+  'acct.remove': 'Remove account',
+  'acct.remove.title': 'Forget this account?',
+  'acct.remove.body': '{0} will be removed from the launcher. Your saves, instances and mods are untouched.',
+  'acct.remove.body_ms': '{0} will be removed and its sign-in token deleted from this machine. Saves, instances and mods are untouched.',
+  'acct.remove.busy': 'Removing…',
+  'acct.remove.retry': 'Try again',
+  'acct.relogin': 'Sign in again',
+  'acct.relogin_tip': 'No sign-in token for this account on this machine — a launch would fail. Sign in again to restore it.',
 
   // Misc
   'loading': 'Loading…',
@@ -352,6 +363,7 @@ const en: Record<string, string> = {
   'isettings.mods.add_file': 'Add from file',
   'isettings.mods.open_folder': 'Open Folder',
   'isettings.mods.delete_selected': 'Delete selected',
+  'isettings.mods.failed': 'Some files were not updated',
   'isettings.mods.empty': 'No mods installed',
   'isettings.mods.check_updates': 'Check updates',
   'isettings.mods.checking': 'Checking…',

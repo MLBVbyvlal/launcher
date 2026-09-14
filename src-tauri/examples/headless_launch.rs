@@ -32,6 +32,35 @@ fn log_tail(log: &str, n: usize) -> String {
     lines[lines.len().saturating_sub(n)..].join("\n")
 }
 
+/// Lines that name a problem, in log order.
+///
+/// A raw tail is useless as a failure report: the annotations are clipped to a
+/// few hundred characters, so a 25-line tail of a stack trace arrives as
+/// nothing but `at <obfuscated>.a(SourceFile:40)` frames — which is exactly
+/// what seven failed proofs taught us (the exception itself sat above the
+/// window). Pick the lines that carry a message instead, and skip the frames.
+fn crash_lines(log: &str, max: usize) -> Vec<String> {
+    const NEEDLES: &[&str] = &[
+        "Exception in thread", "Caused by:", "ERROR", "GLFW", "LWJGL",
+        "Couldn't", "Could not", "Failed to", "Unsupported", "Unable to",
+        "incompliant", "insecure",
+    ];
+    log.lines()
+        .filter(|l| !l.trim_start().starts_with("at "))
+        .filter(|l| NEEDLES.iter().any(|n| l.contains(n)))
+        // Each line is clipped so that 4 of them still fit one annotation.
+        .map(|l| {
+            let trimmed = l.trim();
+            if trimmed.chars().count() <= 190 {
+                trimmed.to_string()
+            } else {
+                format!("{}…", trimmed.chars().take(190).collect::<String>())
+            }
+        })
+        .take(max)
+        .collect()
+}
+
 /// Escape text for a GitHub workflow command payload.
 fn esc(s: &str) -> String {
     s.replace('%', "%25").replace('\r', "%0D").replace('\n', "%0A")
@@ -45,6 +74,31 @@ fn note(title: &str, msg: &str) {
 fn err_note(title: &str, msg: &str) {
     let msg: String = msg.chars().take(600).collect();
     println!("::error title={}::{}", esc(title), esc(&msg));
+}
+
+/// One annotation per chunk of lines.
+///
+/// `::error` payloads are clipped (`err_note` above) and the GitHub annotation
+/// API truncates too, so a wall of log lines must arrive pre-chunked — that is
+/// the only way a failure read through `gh api …/annotations` still shows the
+/// exception instead of half of it.
+fn err_notes_chunked(title: &str, lines: &[String]) {
+    if lines.is_empty() {
+        err_note(title, "(no line matched — the log holds only stack frames)");
+        return;
+    }
+    for (i, chunk) in lines.chunks(4).enumerate() {
+        err_note(&format!("{} #{}", title, i + 1), &chunk.join(" ⏎ "));
+    }
+    note(&format!("{title}-count"), &format!("{} suspicious line(s) in the log", lines.len()));
+}
+
+/// Everything a reader needs when the client did not boot: the lines that name
+/// the problem, then the head and the tail of the log for context.
+fn report_failure(title: &str, log: &str) {
+    err_notes_chunked(title, &crash_lines(log, 40));
+    let head: Vec<String> = log.lines().take(6).map(str::to_string).collect();
+    err_notes_chunked(&format!("{title}-head"), &head);
 }
 
 fn main() {
@@ -127,7 +181,14 @@ async fn proof_body() {
     )
     .await
     {
-        err_note("pipeline-failed", &format!("{e:#}"));
+        // `{e:#}` is a full anyhow chain and routinely exceeds one annotation,
+        // so give each cause its own.
+        let chain: Vec<String> = format!("{e:#}")
+            .split(": ")
+            .map(|s| s.trim().to_string())
+            .filter(|s| !s.is_empty())
+            .collect();
+        err_notes_chunked("pipeline-failed", &chain);
         panic!("launch pipeline: {e:#}");
     }
     note(
@@ -159,12 +220,12 @@ async fn proof_body() {
             .unwrap()
             .contains_key(INSTANCE);
         if !running {
-            err_note("game-exited-early", &log_tail(&log, 25));
+            report_failure("game-exited-early", &log);
             println!("--- game exited early, full log ---\n{log}");
             break false;
         }
         if start.elapsed() > BOOT_TIMEOUT {
-            err_note("boot-timeout", &log_tail(&log, 25));
+            report_failure("boot-timeout", &log);
             println!("--- boot timeout, log tail ---\n{}", log_tail(&log, 40));
             break false;
         }

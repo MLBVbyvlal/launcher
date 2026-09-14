@@ -1,6 +1,48 @@
 import { motion } from 'framer-motion'
 import { getLang, useT } from '../i18n'
-import { spring } from '../lib/types'
+import { spring, type Account } from '../lib/types'
+
+// ─── Remove-account confirmation ──────────────────────────────────────────────
+
+/**
+ * Removal is destructive in a way the rest of the account UI is not: for a
+ * Microsoft account it also deletes the vault entry, so the text says which.
+ * `error` keeps the dialog open when `vault_forget_account` refused — the token
+ * would otherwise survive with nothing in the UI pointing at it.
+ */
+export function RemoveAccountModal(p: {
+  acct: Account; busy: boolean; error: string; onConfirm: () => void; onClose: () => void
+}) {
+  const t = useT(getLang())
+  const { acct, busy, error } = p
+  return (
+    <motion.div className="overlay" initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
+      onClick={busy ? undefined : p.onClose}
+    >
+      <motion.div className="modal glass modal-sm"
+        initial={{ opacity: 0, scale: 0.9, y: 20 }} animate={{ opacity: 1, scale: 1, y: 0 }}
+        exit={{ opacity: 0, scale: 0.9, y: 16 }} transition={spring}
+        onClick={e => e.stopPropagation()}
+        style={{ padding: '22px 24px' }}
+      >
+        <div className="modal-head">
+          <span className="modal-title">{t('acct.remove.title')}</span>
+          <button className="modal-close" onClick={p.onClose}>×</button>
+        </div>
+        <div style={{ fontSize: 12.5, color: 'var(--text-secondary)', lineHeight: 1.55 }}>
+          {(acct.type === 'microsoft' ? t('acct.remove.body_ms') : t('acct.remove.body')).replace('{0}', acct.username)}
+        </div>
+        {error && <div className="inst-error" style={{ marginTop: 10 }}>{t('error.prefix')} {error}</div>}
+        <div style={{ display: 'flex', gap: 10, marginTop: 18 }}>
+          <button className="btn-danger-solid" onClick={p.onConfirm} disabled={busy}>
+            {busy ? t('acct.remove.busy') : error ? t('acct.remove.retry') : t('acct.remove')}
+          </button>
+          <button className="btn-cancel" onClick={p.onClose}>{t('settings.cancel')}</button>
+        </div>
+      </motion.div>
+    </motion.div>
+  )
+}
 
 // ─── Add-account modal ────────────────────────────────────────────────────────
 

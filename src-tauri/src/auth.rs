@@ -132,28 +132,19 @@ async fn ms_token_chain(client: &reqwest::Client, ms_token: &str) -> Result<(Str
     Ok((mc_token, uuid, username))
 }
 
-/// Refresh the Minecraft session of a stored account when it is older than
-/// `REFRESH_AFTER_SECS`. Microsoft rotates refresh tokens, so the vault is
-/// rewritten with whatever the response returned. Called from `launch_game`;
-/// exposed as a command for an explicit "re-login" too.
-#[tauri::command]
-pub(crate) async fn refresh_ms_token(app: tauri::AppHandle, uuid: String) -> Result<MsAccount, String> {
-    let stored = app.state::<vault::Vault>().get(&uuid)
-        .ok_or_else(|| "Account is not signed in on this machine — sign in again.".to_string())?;
-    let (username, new_uuid, access, refresh) = refresh_tokens(&stored.refresh_token).await?;
-    store_tokens(&app, &new_uuid, access, refresh)?;
-    if new_uuid != uuid { let _ = app.state::<vault::Vault>().remove(&uuid); }
-    Ok(MsAccount { username, uuid: new_uuid })
-}
-
-/// Which stored accounts still have tokens here. The frontend drops MS
-/// accounts that are missing (e.g. after a data reset) instead of launching
-/// with an empty token.
+/// Which stored accounts still have a token on this machine. The frontend
+/// badges the Microsoft accounts that do not (src/lib/useAccounts.ts →
+/// `needsRelogin`) and offers a sign-in, instead of letting Play fail after the
+/// whole download. `refresh_tokens` is deliberately not exposed as a command:
+/// `launch_game` refreshes by itself, and a session with no vault entry can
+/// only be fixed by `microsoft_login`.
 #[tauri::command]
 pub(crate) fn vault_has_account(app: tauri::AppHandle, uuid: String) -> bool {
     app.state::<vault::Vault>().has(&uuid)
 }
 
+/// Delete an account's tokens. Called when the user removes the account, so a
+/// refresh token never outlives the list entry that points at it.
 #[tauri::command]
 pub(crate) fn vault_forget_account(app: tauri::AppHandle, uuid: String) -> Result<(), String> {
     app.state::<vault::Vault>().remove(&uuid).map_err(|e| format!("{e:#}"))
@@ -257,7 +248,7 @@ pub(crate) async fn microsoft_login(app: tauri::AppHandle) -> Result<MsAccount, 
         .to_string();
     let refresh_token = ms["refresh_token"].as_str().unwrap_or("").to_string();
 
-    // Xbox → XSTS → Minecraft chain (shared with refresh_ms_token)
+    // Xbox → XSTS → Minecraft chain (shared with the launch-time refresh in lib.rs)
     let (mc_token, uuid, username) = ms_token_chain(&client, &ms_token).await?;
 
     store_tokens(&app, &uuid, mc_token, refresh_token)?;

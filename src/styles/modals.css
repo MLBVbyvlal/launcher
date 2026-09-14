@@ -59,6 +59,10 @@
 .inst-modal-footer { display: flex; justify-content: flex-end; gap: 8px; padding: 10px 16px 16px; }
 .btn-cancel { padding: 9px 18px; background: rgba(255,255,255,0.06); border: 1px solid rgba(255,255,255,0.1); border-radius: var(--radius-sm); color: var(--text-muted); font-size: 13px; font-weight: 600; font-family: inherit; cursor: pointer; transition: all 0.14s; }
 .btn-cancel:hover { background: rgba(255,255,255,0.1); color: var(--text-secondary); }
+/* Destructive confirm without the danger-zone countdown machinery. */
+.btn-danger-solid { padding: 9px 18px;background: rgba(248,113,113,0.85);border: none;border-radius: var(--radius-sm);color: #fff;font-size: 13px;font-weight: 700;font-family: inherit;cursor: pointer;transition: all 0.14s; }
+.btn-danger-solid:hover { background: #f87171; }
+.btn-danger-solid:disabled { opacity: .55;cursor: not-allowed; }
 .lb-btn { background: linear-gradient(135deg, var(--lb-accent), var(--lb-accent-dark)) !important; color: #fff !important; box-shadow: 0 3px 10px rgba(var(--lb-accent-rgb) / 0.3) !important; }
 .lb-btn:hover:not(:disabled) { filter: brightness(1.1); }
 .lb-picked { background: rgba(var(--lb-accent-rgb) / 0.09) !important; border-color: rgba(var(--lb-accent-rgb) / 0.22) !important; }

@@ -171,6 +171,7 @@ const ru: Record<string, string> = {
   'settings.danger_item5': 'Все настройки лаунчера (RAM, загрузки, параметры)',
   'settings.danger_wait': 'Подождите {0}с перед подтверждением…',
   'settings.danger_confirm_hint': 'Теперь можно подтвердить удаление.',
+  'settings.danger_busy': 'Идёт загрузка для: {0}. Сначала отмени её в карточке запуска — очистка папки данных посреди закачки оставит недоустановленную версию.',
   'settings.cancel': 'Отмена',
   'settings.deleting': 'Удаляем…',
   'settings.confirm_delete': 'Подтвердить удаление',
@@ -245,6 +246,16 @@ const ru: Record<string, string> = {
   'acct.ms_loading': 'Завершите вход в открывшемся окне…',
   'acct.ms_note_loading': 'Завершите вход в открывшемся окне браузера',
   'acct.ms_note': 'Требуется купленная лицензия Minecraft',
+  // Удаление аккаунта — единственная операция здесь, которая трогает и хранилище
+  // токенов: для Microsoft-аккаунта вместе с ним стирается запись из vault.
+  'acct.remove': 'Удалить аккаунт',
+  'acct.remove.title': 'Забыть этот аккаунт?',
+  'acct.remove.body': '{0} будет удалён из лаунчера. Сейвы, инстансы и моды не тронуты.',
+  'acct.remove.body_ms': '{0} будет удалён, а его токен входа стёрт с этого устройства. Сейвы, инстансы и моды не тронуты.',
+  'acct.remove.busy': 'Удаляем…',
+  'acct.remove.retry': 'Повторить',
+  'acct.relogin': 'Войти заново',
+  'acct.relogin_tip': 'На этом устройстве нет токена этого аккаунта — запуск завершился бы ошибкой. Войди заново, чтобы вернуть его.',
 
   // Misc
   'loading': 'Загрузка…',
@@ -352,6 +363,7 @@ const ru: Record<string, string> = {
   'isettings.mods.add_file': 'Добавить файл',
   'isettings.mods.open_folder': 'Открыть папку',
   'isettings.mods.delete_selected': 'Удалить выбранные',
+  'isettings.mods.failed': 'Часть файлов не обновилась',
   'isettings.mods.empty': 'Модов нет',
   'isettings.mods.check_updates': 'Проверить обновления',
   'isettings.mods.checking': 'Проверка…',

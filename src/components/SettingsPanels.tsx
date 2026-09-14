@@ -138,11 +138,30 @@ export function DangerPanel({ dangerOpen, setDangerOpen, countdown, setCountdown
 }) {
   const t = useT(getLang())
   const [deleting, setDeleting] = useState(false)
+  const [blocked, setBlocked]   = useState('')
+  // Refuse to wipe the data directory while a launch is writing to it: the
+  // delete would race the download and the reload erases the only evidence that
+  // it failed. `active_downloads` is the backend's own list of in-flight
+  // launches, so the UI does not have to guess.
   const handleDelete = async () => {
-    setDeleting(true)
-    localStorage.clear()
-    if (isTauri) { try { await invoke('reset_all_data') } catch { /* ignore */ } }
-    window.location.reload()
+    setDeleting(true); setBlocked('')
+    if (isTauri) {
+      let busy: string[] = []
+      try { busy = await invoke<string[]>('active_downloads') }
+      catch (e) { setBlocked(String(e)); setDeleting(false); return }
+      if (busy.length > 0) {
+        setBlocked(t('settings.danger_busy').replace('{0}', busy.join(', ')))
+        setDeleting(false)
+        return
+      }
+    }
+    // localStorage is cleared only after the directory is really gone — the
+    // other order leaves instances on disk with no UI knowing about them.
+    try {
+      if (isTauri) await invoke('reset_all_data')
+      localStorage.clear()
+      window.location.reload()
+    } catch (e) { setBlocked(String(e)); setDeleting(false) }
   }
   return (
 <div className="danger-panel">
@@ -163,6 +182,7 @@ export function DangerPanel({ dangerOpen, setDangerOpen, countdown, setCountdown
         <li>{t('settings.danger_item4')}</li>
         <li>{t('settings.danger_item5')}</li>
       </ul>
+      {blocked && <div className="inst-error" style={{ marginTop: 8, whiteSpace: 'pre-line' }}>{blocked}</div>}
       <div className="danger-countdown">
         {countdown > 0
           ? t('settings.danger_wait').replace('{0}', String(countdown))

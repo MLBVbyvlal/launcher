@@ -284,7 +284,6 @@ pub fn run() {
             get_lb_branches,
             get_lb_versions,
             microsoft_login,
-            refresh_ms_token,
             vault_has_account,
             vault_forget_account,
             rename_instance_data,
