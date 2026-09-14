@@ -40,6 +40,8 @@ on:
       - 'src-tauri/examples/headless_launch.rs'
       - 'src-tauri/Cargo.toml'
       - 'src-tauri/tauri.conf.json'
+      # Editing the proof must prove that the proof runs.
+      - '.github/workflows/launch-proof.yml'
 
 concurrency:
   group: proof-${{ github.ref }}
