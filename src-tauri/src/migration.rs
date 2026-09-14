@@ -129,8 +129,9 @@ pub(crate) fn migration_scan() -> MigrationScan {
     }
 
     // 4. Stale self-update packages in the temp dir (outside the data dir).
+    let tmp = std::env::temp_dir();
     let name = "mlbv-just-updated.txt";
-    let p = std::env::temp_dir().join(name);
+    let p = tmp.join(name);
     if p.is_file() {
         let bytes = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
         garbage.push(MigrationGarbage { path: format!("(temp)/{name}"), bytes, kind: "temp" });
