@@ -31,7 +31,9 @@ on:
       - 'src-tauri/tauri.conf.json'
       - '.github/workflows/launch-proof.yml'
   push:
-    branches: [main]
+    # TEMP-DIAGNOSTICS: '**' while the headless proof is being debugged; revert
+    # to [main] before merging (the 0.0.5 session used the same trick).
+    branches: ['**']
     paths:
       - 'src-tauri/src/launcher/**'
       - 'src-tauri/src/lib.rs'
