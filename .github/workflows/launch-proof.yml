@@ -1,12 +1,20 @@
 name: Launch proof (headless Minecraft on Linux)
 
-# Manual-only: boots a real Minecraft client through the actual launch
-# pipeline on a CI runner (network + xvfb + Mesa llvmpipe) and asserts the
-# JVM prints its LWJGL banner. Too slow and too network-hungry for every
-# push — trigger by hand after touching the launch flow:
-#   gh workflow run launch-proof.yml [-f mc_version=1.20.1]
-# Proof is emitted as check-run annotations (readable via the API) because
-# raw logs live on blob storage that restricted sandboxes cannot reach.
+# Boots a real Minecraft client through the actual launch pipeline on a CI
+# runner (network + xvfb + Mesa llvmpipe) and asserts the JVM prints its LWJGL
+# banner. This is the only check that exercises `launcher::launch` end to end —
+# `cargo test` covers pure helpers, nothing else.
+#
+# It runs on PRs/pushes that touch the launcher, and by hand:
+#   gh workflow run launch-proof.yml [-f mc_version=1.20.1] --ref <branch>
+#
+# Proof and failure detail are emitted as check-run *annotations*, because raw
+# logs live on blob storage that restricted sandboxes cannot reach while the
+# annotations API works:
+#   gh api repos/<owner>/<repo>/check-runs/<job_id>/annotations --paginate \
+#     --jq '.[] | "\(.annotation_level) \(.message)"'
+# Nothing uploads latest.log or hs_err dumps — they are user data by AGENTS.md
+# §2.1 and never leave the runner.
 
 on:
   workflow_dispatch:
@@ -14,15 +22,40 @@ on:
       mc_version:
         description: 'Vanilla version to boot'
         default: '1.20.1'
+  pull_request:
+    paths:
+      - 'src-tauri/src/launcher/**'
+      - 'src-tauri/src/lib.rs'
+      - 'src-tauri/examples/headless_launch.rs'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/tauri.conf.json'
+      - '.github/workflows/launch-proof.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'src-tauri/src/launcher/**'
+      - 'src-tauri/src/lib.rs'
+      - 'src-tauri/examples/headless_launch.rs'
+      - 'src-tauri/Cargo.toml'
+      - 'src-tauri/tauri.conf.json'
+
+concurrency:
+  group: proof-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
+  # ── 1. The launch pipeline itself ──────────────────────────────────────────
   proof:
-    name: Install .deb and boot Minecraft headless
+    name: Boot Minecraft headless through launcher::launch
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 40
     env:
       MLBV_PROOF_MC_VERSION: ${{ inputs.mc_version || '1.20.1' }}
+      # Software GL: the runner has no GPU. llvmpipe implements the core
+      # profile Minecraft needs; the Xvfb screen below must be deep enough for
+      # GLX to hand out a 24-bit visual.
       LIBGL_ALWAYS_SOFTWARE: '1'
+      GALLIUM_DRIVER: 'llvmpipe'
     steps:
       - uses: actions/checkout@v4
 
@@ -43,6 +76,75 @@ jobs:
             build-essential \
             pkg-config \
             xvfb \
+            xauth \
+            libgl1-mesa-dri \
+            mesa-utils
+
+      - uses: dtolnay/rust-toolchain@stable
+
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+
+      # generate_context! embeds the frontend dist/, so it has to exist before
+      # cargo runs. Nothing in this job needs the bundler — that is job 2.
+      - name: npm ci and frontend build
+        run: |
+          npm ci
+          npm run build
+
+      - name: Boot real Minecraft through the launch pipeline
+        working-directory: src-tauri
+        run: xvfb-run -a -s "-screen 0 1280x1024x24" cargo run --locked --example headless_launch
+
+      - name: Summarise the boot log
+        if: always()
+        run: |
+          LOG="$HOME/.mlbv/instances/ci-proof/logs/latest.log"
+          size=$(stat -c%s "$LOG" 2>/dev/null || echo MISSING)
+          echo "::notice title=proof-log::$size bytes at $LOG"
+          if [ -f "$LOG" ] && grep -q "LWJGL Version" "$LOG"; then
+            line=$(grep -m1 "LWJGL Version" "$LOG" | head -c 300 | tr -d '\r\n' | sed 's/%/%25/g')
+            ogl=$(grep -m1 -i "OpenGL:" "$LOG" | head -c 300 | tr -d '\r\n' | sed 's/%/%25/g')
+            echo "::notice title=Minecraft booted headless::$line"
+            [ -n "$ogl" ] && echo "::notice title=OpenGL::$ogl"
+          elif [ -f "$LOG" ]; then
+            # The example already annotated the crash lines; this is the
+            # fallback for when it died before it could (panic in the runner).
+            echo "::error title=Launch proof::no LWJGL banner in $LOG"
+          else
+            echo "::error title=Launch proof::no game log at all — the pipeline never reached spawn"
+          fi
+
+  # ── 2. Packaging + the installed binary (slow, independent) ────────────────
+  # Kept in its own job on purpose: a bundler failure used to kill the step
+  # before the launch proof ran, so a red proof meant "unknown" (run 34761459040).
+  package-smoke:
+    name: Install the .deb and keep the app alive
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: System dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            libxdo-dev \
+            libssl-dev \
+            build-essential \
+            pkg-config \
+            xvfb \
+            xauth \
+            libgl1-mesa-dri \
             mesa-utils
 
       - uses: dtolnay/rust-toolchain@stable
@@ -65,7 +167,7 @@ jobs:
           # The installed app must stay alive under a virtual display; timeout
           # killing it (exit 124) is the success case, an early exit is a crash.
           set +e
-          timeout 90 xvfb-run -a /usr/bin/mlbv
+          timeout 90 xvfb-run -a -s "-screen 0 1280x1024x24" /usr/bin/mlbv
           code=$?
           set -e
           if [ "$code" -ne 124 ]; then
@@ -73,23 +175,3 @@ jobs:
             exit 1
           fi
           echo "Installed app stayed alive 90 s under xvfb."
-
-      - name: Boot real Minecraft through the launch pipeline
-        working-directory: src-tauri
-        run: xvfb-run -a cargo run --locked --example headless_launch
-
-      - name: Emit proof annotations
-        if: always()
-        run: |
-          LOG="$HOME/.mlbv/instances/ci-proof/logs/latest.log"
-          size=$(stat -c%s "$LOG" 2>/dev/null || echo MISSING)
-          echo "::notice title=proof-log::$size bytes at $LOG"
-          if [ -f "$LOG" ] && grep -q "LWJGL Version" "$LOG"; then
-            line=$(grep -m1 "LWJGL Version" "$LOG" | head -c 300 | tr -d '\r\n' | sed 's/%/%25/g')
-            ogl=$(grep -m1 -i "OpenGL:" "$LOG" | head -c 300 | tr -d '\r\n' | sed 's/%/%25/g')
-            echo "::notice title=Minecraft booted headless::$line"
-            [ -n "$ogl" ] && echo "::notice title=OpenGL::$ogl"
-          else
-            echo "::error title=Launch proof::no LWJGL banner in $LOG"
-            tail -c 2000 "$LOG" 2>/dev/null || echo "(no log file)"
-          fi

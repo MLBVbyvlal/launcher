@@ -10,11 +10,12 @@ import { getLang, type Lang, useT } from './i18n'
 import { isTauri, spring, type Account, type Instance, type Tab } from './lib/types'
 import { useLaunchQueue } from './lib/useLaunchQueue'
 import { useInstances } from './lib/useInstances'
+import { useAccounts } from './lib/useAccounts'
 import { useUpdateCheck } from './lib/useUpdateCheck'
 import { useBoot } from './lib/useBoot'
 import Sidebar from './components/Sidebar'
 import MainArea from './components/MainArea'
-import { AddAccountModal, StopGameModal } from './components/AppModals'
+import { AddAccountModal, RemoveAccountModal, StopGameModal } from './components/AppModals'
 import { applyAccent } from './lib/accent'
 import { LoadingScreen } from './components/ui'
 import SettingsModal from './components/SettingsModal'
@@ -44,28 +45,20 @@ export default function App() {
   // App state — manifest fetch, migration gate
   const { appState, setAppState, migrateScan, migratePins, loadStatus, loadProgress, versions, fetchVersions } = useBoot()
 
-  // Accounts — persisted in localStorage
-  const [accounts, setAccounts] = useState<Account[]>(() => {
-    // Pre-0.0.6 entries carried accessToken/refreshToken in localStorage;
-    // drop those fields on load so the plaintext copy disappears on the
-    // next persist. The Rust vault has no copy of them (the user re-signs in).
-    try {
-      const raw = JSON.parse(localStorage.getItem('mlbv_accounts') ?? '[]') as Array<Account & Record<string, unknown>>
-      return raw.map(a => ({ type: a.type, username: a.username, uuid: a.uuid }))
-    } catch { return [] }
-  })
-  const [selected, setSelected] = useState<Account | null>(() => {
-    try {
-      const uuid = localStorage.getItem('mlbv_selected_uuid')
-      if (!uuid) return null
-      const saved: Account[] = JSON.parse(localStorage.getItem('mlbv_accounts') ?? '[]')
-      return saved.find(a => a.uuid === uuid) ?? null
-    } catch { return null }
-  })
+  // Accounts — the frontend copy is {type, username, uuid}; tokens stay in the
+  // Rust vault. See src/lib/useAccounts.ts for what that implies.
+  const {
+    accounts, selected, setSelected, adopt,
+    msLoading, msError, setMsError,
+    needsRelogin, addOffline, loginMicrosoft, removeAccount,
+  } = useAccounts()
   const [username, setUsername]       = useState('')
   const [showAddAcct, setShowAddAcct] = useState(false)
-  const [msLoading, setMsLoading]     = useState(false)
-  const [msError, setMsError]         = useState('')
+  // Account whose removal is being confirmed (it also deletes the vault entry),
+  // the busy flag, and the failure text the confirm dialog shows.
+  const [removeAcctOf, setRemoveAcctOf] = useState<Account | null>(null)
+  const [removeBusy, setRemoveBusy]     = useState(false)
+  const [removeError, setRemoveError]   = useState('')
 
 
   // (LiquidBounce versions are loaded inside CreateInstanceModal per-branch)
@@ -75,11 +68,7 @@ export default function App() {
     addInstance, removeInstance, renameInstance, handleDeleteDisk, applyMigrationPins,
   } = useInstances(appState)
 
-  // Persist accounts
-  useEffect(() => { localStorage.setItem('mlbv_accounts', JSON.stringify(accounts)) }, [accounts])
   useEffect(() => {
-    if (selected) localStorage.setItem('mlbv_selected_uuid', selected.uuid)
-    else localStorage.removeItem('mlbv_selected_uuid')
     setSkinError(false) // reset skin when account changes
   }, [selected])
 
@@ -137,25 +126,30 @@ export default function App() {
   const otherInstances = tabInstances.filter(i => i.id !== activeInstance?.id)
 
   // ── Accounts ─────────────────────────────────────────────────────────────
-  const addOffline = () => {
-    const name = username.trim(); if (!name) return
-    const acct: Account = { type: 'offline', username: name, uuid: crypto.randomUUID() }
-    setAccounts(prev => [...prev, acct]); setSelected(acct); setUsername(''); setShowAddAcct(false)
+  // State and the vault handshake live in useAccounts; these wrappers only add
+  // what the modal owns — closing it and clearing the draft name.
+  const submitOffline = () => {
+    if (!username.trim()) return
+    addOffline(username)
+    setUsername(''); setShowAddAcct(false)
   }
 
-  const handleMsLogin = async () => {
-    if (!isTauri) return
-    setMsLoading(true); setMsError('')
-    try {
-      type Raw = { username: string; uuid: string }
-      // Tokens stay in the Rust vault (DPAPI-sealed on Windows); the
-      // frontend only ever sees the profile.
-      const raw = await invoke<Raw>('microsoft_login')
-      const acct: Account = { type: 'microsoft', username: raw.username, uuid: raw.uuid }
-      setAccounts(prev => [...prev.filter(a => a.uuid !== acct.uuid), acct])
-      setSelected(acct); setShowAddAcct(false)
-    } catch (err) { setMsError(String(err)) }
-    setMsLoading(false)
+  const submitMsLogin = async () => {
+    // Only close on success: the error text stays in the modal so the reason is
+    // readable instead of vanishing behind a closed overlay.
+    if (await loginMicrosoft()) return
+    setShowAddAcct(false)
+  }
+
+  const confirmRemoveAccount = async () => {
+    if (!removeAcctOf) return
+    setRemoveBusy(true)
+    const err = await removeAccount(removeAcctOf)
+    setRemoveBusy(false)
+    // A failed vault delete keeps the dialog open with the reason: the account
+    // is still listed, so closing the modal would hide an unreferenced token.
+    if (err) { setRemoveError(err); return }
+    setRemoveAcctOf(null); setRemoveError('')
   }
 
   const handleCtxAction = (action: CtxAction, inst: Instance) => {
@@ -220,6 +214,11 @@ export default function App() {
   // is launching). Tokens for Microsoft accounts are resolved in Rust.
   const handlePlay = () => {
     if (!selected || !activeInstance) return
+    // A Microsoft account with no vault entry cannot authenticate. Take the
+    // user to sign-in here rather than failing after the whole download — the
+    // launch path would refuse with the same message (lib.rs, `launch_game`),
+    // only minutes later.
+    if (needsRelogin.includes(selected.uuid)) { setMsError(''); setShowAddAcct(true); return }
     if (running.includes(activeInstance.name)) return
     if (launchQ.jobs[activeInstance.name]) return
     launchQ.enqueue(activeInstance, selected)
@@ -228,12 +227,9 @@ export default function App() {
   // ── Setup wizard completion ───────────────────────────────────────────────
   const handleSetupDone = useCallback((newLang: Lang, account: Account | null) => {
     setLang(newLang)
-    if (account) {
-      setAccounts(prev => [...prev.filter(a => a.uuid !== account.uuid), account])
-      setSelected(account)
-    }
+    if (account) adopt(account)
     setSetupDone(true)
-  }, [])
+  }, [adopt])
 
   const winControls = {
     minimize: () => { if (isTauri) getCurrentWindow().minimize() },
@@ -294,6 +290,7 @@ export default function App() {
             collapsed={sidebarCollapsed} onToggleCollapsed={() => setSidebarCollapsed(c => !c)}
             activeTab={activeTab}
             accounts={accounts} selected={selected} onSelectAccount={setSelected}
+            needsRelogin={needsRelogin} onRemoveAccount={acct => { setRemoveError(''); setRemoveAcctOf(acct) }}
             skinError={skinError} onSkinError={() => setSkinError(true)}
             onAddAccount={() => setShowAddAcct(true)} onOpenSettings={() => setShowSettings(true)}
             activeInstance={activeInstance} otherInstances={otherInstances}
@@ -332,9 +329,18 @@ export default function App() {
         {/* ── ADD ACCOUNT MODAL ── */}
         <AnimatePresence>
           {showAddAcct && (
-            <AddAccountModal username={username} onUsername={setUsername} onAddOffline={addOffline}
-              msLoading={msLoading} msError={msError} onMsLogin={handleMsLogin}
+            <AddAccountModal username={username} onUsername={setUsername} onAddOffline={submitOffline}
+              msLoading={msLoading} msError={msError} onMsLogin={submitMsLogin}
               onClose={() => { setShowAddAcct(false); setMsError('') }} />
+          )}
+        </AnimatePresence>
+
+        {/* ── REMOVE ACCOUNT MODAL ── */}
+        <AnimatePresence>
+          {removeAcctOf && (
+            <RemoveAccountModal acct={removeAcctOf} busy={removeBusy} error={removeError}
+              onConfirm={confirmRemoveAccount}
+              onClose={() => { setRemoveAcctOf(null); setRemoveError('') }} />
           )}
         </AnimatePresence>
 

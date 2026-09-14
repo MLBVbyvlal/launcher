@@ -213,7 +213,12 @@ pub(crate) fn delete_mods(instance_name: String, filenames: Vec<String>) -> Resu
     launcher::valid_instance_name(&instance_name).map_err(|e| e.to_string())?;
     let mods_dir = launcher::instances_dir().join(&instance_name).join("mods");
     for filename in &filenames {
-        if filename.contains('/') || filename.contains('\\') { continue; }
+        // A separator means the caller is not naming a mod file in this
+        // instance. Skipping quietly here used to report success for a file
+        // that is still on disk, so it is a hard error instead.
+        if filename.contains('/') || filename.contains('\\') || filename == ".." {
+            return Err(format!("Refused to delete {filename}: not a mod file name"));
+        }
         let path = mods_dir.join(filename);
         if path.exists() {
             std::fs::remove_file(&path).map_err(|e| format!("Cannot delete {filename}: {e}"))?;

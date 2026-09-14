@@ -11,6 +11,9 @@ export type SidebarProps = {
   collapsed: boolean; onToggleCollapsed: () => void
   activeTab: Tab
   accounts: Account[]; selected: Account | null; onSelectAccount: (a: Account) => void
+  // Microsoft accounts with no token in the vault: they cannot launch, so the
+  // card says so instead of letting Play fail after a multi-minute download.
+  needsRelogin: string[]; onRemoveAccount: (a: Account) => void
   skinError: boolean; onSkinError: () => void
   onAddAccount: () => void; onOpenSettings: () => void
   activeInstance: Instance | null; otherInstances: Instance[]
@@ -26,8 +29,9 @@ export default function Sidebar(p: SidebarProps) {
   const t = useT(getLang())
   const {
     collapsed: sidebarCollapsed, activeTab, accounts, selected, skinError,
-    activeInstance, otherInstances, renamingId, renameText, jobs, running,
+    needsRelogin, activeInstance, otherInstances, renamingId, renameText, jobs, running,
   } = p
+  const removeAccount = p.onRemoveAccount
   const setSelected = p.onSelectAccount
   const setSkinError = () => p.onSkinError()
   const setShowSettings = () => p.onOpenSettings()
@@ -75,12 +79,27 @@ export default function Sidebar(p: SidebarProps) {
                       <div className="acct-name">{selected.username}</div>
                       <div className="acct-badge">{selected.type === 'offline' ? t('sw.acct.offline.label') : t('sw.acct.ms.label')}</div>
                     </div>
+                    {needsRelogin.includes(selected.uuid) && (
+                      <motion.button className="acct-relogin"
+                        title={t('acct.relogin_tip')}
+                        onClick={e => { e.stopPropagation(); setShowAddAcct() }}
+                        whileHover={{ scale: 1.04 }} whileTap={{ scale: 0.96 }}
+                      >{t('acct.relogin')}</motion.button>
+                    )}
                     <motion.button className="acct-settings-btn" title={t('settings.title')}
                       onClick={e => { e.stopPropagation(); setShowSettings() }}
                       whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }}
                     >
                       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
                         <path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/>
+                      </svg>
+                    </motion.button>
+                    <motion.button className="acct-remove-btn" title={t('acct.remove')}
+                      onClick={e => { e.stopPropagation(); removeAccount(selected) }}
+                      whileHover={{ scale: 1.12 }} whileTap={{ scale: 0.9 }}
+                    >
+                      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round">
+                        <path d="M6 6l12 12M18 6L6 18"/>
                       </svg>
                     </motion.button>
                   </motion.div>
@@ -100,7 +119,11 @@ export default function Sidebar(p: SidebarProps) {
               onClick={() => setSelected(a)} whileHover={{ x: 3 }} transition={spring}
             >
               <span className="acct-mini-av">{a.username[0].toUpperCase()}</span>
-              <span>{a.username}</span>
+              <span className="acct-mini-name">{a.username}</span>
+              {needsRelogin.includes(a.uuid) &&
+                <span className="acct-mini-warn" title={t('acct.relogin_tip')}>!</span>}
+              <button className="acct-mini-x" title={t('acct.remove')}
+                onClick={e => { e.stopPropagation(); removeAccount(a) }}>{'×'}</button>
             </motion.div>
           ))}
         </AnimatePresence>

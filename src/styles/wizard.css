@@ -185,6 +185,13 @@
 }
 .acct-settings-btn svg { width:13px;height:13px; }
 .acct-settings-btn:hover { background:rgba(var(--accent-rgb) / 0.1);color:var(--accent);border-color:rgba(var(--accent-rgb) / 0.25); }
+/* Same box as the gear, red on hover: it deletes the account's token. */
+.acct-remove-btn { flex-shrink:0;width:26px;height:26px;display:flex;align-items:center;justify-content:center;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.1);border-radius:7px;cursor:pointer;color:var(--text-muted);transition:all 0.15s;padding:0; }
+.acct-remove-btn svg { width:11px;height:11px; }
+.acct-remove-btn:hover { background:rgba(248,113,113,0.12);color:#f87171;border-color:rgba(248,113,113,0.35); }
+/* "No token on this machine" affordance on the account card. */
+.acct-relogin { flex-shrink:0;padding:3px 7px;border-radius:6px;border:1px solid rgba(251,191,36,0.35);background:rgba(251,191,36,0.12);color:#fbbf24;font-size:9.5px;font-weight:700;letter-spacing:0.02em;cursor:pointer;font-family:inherit;transition:all 0.14s;white-space:nowrap; }
+.acct-relogin:hover { background:rgba(251,191,36,0.2);color:#fcd34d; }
 .customize-panel { display:flex;flex-direction:column;gap:0; }
 .color-palette { display:flex;flex-wrap:wrap;gap:7px;margin:10px 0; }
 .color-swatch {

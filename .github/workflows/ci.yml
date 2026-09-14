@@ -14,7 +14,7 @@ concurrency:
 jobs:
   # ── 1. Frontend: type-check + production bundle ─────────────────────────────
   frontend:
-    name: Frontend (tsc + eslint + vite build)
+    name: Frontend (tsc + eslint + repo invariants)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -32,6 +32,12 @@ jobs:
 
       - name: ESLint
         run: npm run lint
+
+      # i18n parity, the frontend↔backend command contract, the 500-line rule
+      # and the five version fields. Cheap, and every one of them has already
+      # broken once (see scripts/check-repo.mjs).
+      - name: Repository invariants
+        run: npm run check:repo
 
       - name: Vite production build
         run: npm run build

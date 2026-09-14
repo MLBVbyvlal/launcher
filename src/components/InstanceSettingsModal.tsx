@@ -34,6 +34,11 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
   const [checkingUpdates, setCheckingUpdates] = useState(false)
   const [updating, setUpdating] = useState<string | null>(null)
   const [showModBrowser, setShowModBrowser] = useState(false)
+  // Failure of the last mods action (add / delete / toggle / update). These
+  // mutate the mods folder, so a swallowed error reads as success — the strip
+  // below is what makes "the mod is not actually there" visible without a
+  // reload. Cleared by the next successful refresh.
+  const [modsError, setModsError] = useState('')
 
   const refreshMods = useCallback(async () => {
     if (!isTauri) return
@@ -41,7 +46,8 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
     try {
       setMods(await invoke<ModRow[]>('list_mods', { instanceName: inst.name }))
       setSelectedMods(new Set())
-    } catch { /* keep the old list */ }
+      setModsError('')
+    } catch (e) { setModsError(String(e)) /* the old list stays, with a reason */ }
     setModsLoading(false)
   }, [inst.name])
 
@@ -53,7 +59,7 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
     try {
       await invoke<string>('set_mod_enabled', { instanceName: inst.name, filename: m.filename, enabled: !m.enabled })
       await refreshMods()
-    } catch { /* */ }
+    } catch (e) { setModsError(`${m.filename}: ${e}`) }
   }
 
   const checkUpdates = async () => {
@@ -67,11 +73,13 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
         cfKey: localStorage.getItem('mlbv_cf_key') ?? '',
       })
       setUpdates(Object.fromEntries(found.map(u => [u.filename, u])))
-    } catch { /* */ }
+    } catch (e) { setModsError(String(e)) }
     setCheckingUpdates(false)
   }
 
-  const installUpdate = async (u: ModUpdateInfo): Promise<boolean> => {
+  /// Resolves to null on success or to the failure text, so the callers can
+  /// report which file did not land instead of pretending the batch worked.
+  const installUpdate = async (u: ModUpdateInfo): Promise<string | null> => {
     try {
       await invoke<string>('install_mod_file', {
         instanceName: inst.name,
@@ -84,16 +92,17 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
         },
       })
       setUpdates(prev => { const n = { ...prev }; delete n[u.filename]; return n })
-      return true
-    } catch {
-      return false
+      return null
+    } catch (e) {
+      return String(e)
     }
   }
 
   const applyUpdate = async (u: ModUpdateInfo) => {
     if (!isTauri || updating) return
     setUpdating(u.filename)
-    await installUpdate(u)
+    const err = await installUpdate(u)
+    if (err) setModsError(`${u.file_name}: ${err}`)
     await refreshMods()
     setUpdating(null)
   }
@@ -102,7 +111,14 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
     const list = Object.values(updates)
     if (!isTauri || updating || list.length === 0) return
     setUpdating('all')
-    for (const u of list) await installUpdate(u)
+    const failed: string[] = []
+    for (const u of list) {
+      const err = await installUpdate(u)
+      if (err) failed.push(u.file_name)
+    }
+    // Partial success is the normal outcome here (one dead CDN link among ten
+    // updates), so name the files rather than claiming the batch went through.
+    if (failed.length > 0) setModsError(`${t('isettings.mods.failed')}: ${failed.join(', ')}`)
     await refreshMods()
     setUpdating(null)
   }
@@ -166,11 +182,15 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
     input.type = 'file'; input.accept = '.jar'; input.multiple = true
     input.onchange = async () => {
       const files = Array.from(input.files ?? [])
+      const failed: string[] = []
       for (const file of files) {
         if (!file.name.endsWith('.jar')) continue
         const buf = await file.arrayBuffer()
-        await invoke('add_mod_file', { instanceName: inst.name, filename: file.name, data: Array.from(new Uint8Array(buf)) }).catch(() => {})
+        try {
+          await invoke('add_mod_file', { instanceName: inst.name, filename: file.name, data: Array.from(new Uint8Array(buf)) })
+        } catch (e) { failed.push(`${file.name}: ${e}`) }
       }
+      if (failed.length > 0) setModsError(failed.join('\n'))
       await refreshMods()
     }
     input.click()
@@ -178,7 +198,9 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
 
   const handleDeleteMods = async () => {
     if (selectedMods.size === 0) return
-    await invoke('delete_mods', { instanceName: inst.name, filenames: Array.from(selectedMods) }).catch(() => {})
+    try {
+      await invoke('delete_mods', { instanceName: inst.name, filenames: Array.from(selectedMods) })
+    } catch (e) { setModsError(String(e)) }
     await refreshMods()
   }
 
@@ -271,6 +293,11 @@ export default function InstanceSettingsModal({ inst, isLb, onClose }: { inst: I
                   <button className="btn-danger-sm" onClick={handleDeleteMods}>{t('isettings.mods.delete_selected')} ({selectedMods.size})</button>
                 )}
               </div>
+              {modsError && (
+                <div className="inst-error" style={{ margin: '0 0 8px', whiteSpace: 'pre-line', fontSize: 11.5 }}>
+                  {t('error.prefix')} {modsError}
+                </div>
+              )}
               {modsLoading ? (
                 <div className="ist-mods-empty">{t('loading')}</div>
               ) : mods.length === 0 ? (

@@ -38,6 +38,13 @@
 .acct-mini { display:flex;align-items:center;gap:8px;padding:5px 7px;border-radius:8px;cursor:pointer;font-size:12px;color:var(--text-secondary);transition:background 0.14s;white-space:nowrap; }
 .acct-mini:hover { background:rgba(255,255,255,0.06); }
 .acct-mini-av { width:20px;height:20px;border-radius:5px;background:rgba(255,255,255,0.12);display:flex;align-items:center;justify-content:center;font-size:9px;font-weight:700;flex-shrink:0; }
+/* Removal is per-account, so it rides on hover instead of cluttering the list —
+   and stays visible on focus for keyboard users. */
+.acct-mini-name { flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis; }
+.acct-mini-x { opacity:0;flex-shrink:0;width:18px;height:18px;padding:0;border:none;border-radius:5px;background:transparent;color:var(--text-muted);font-size:14px;line-height:1;cursor:pointer;transition:all 0.14s;font-family:inherit; }
+.acct-mini:hover .acct-mini-x, .acct-mini-x:focus-visible { opacity:1; }
+.acct-mini-x:hover { background:rgba(248,113,113,0.16);color:#f87171; }
+.acct-mini-warn { flex-shrink:0;width:14px;height:14px;border-radius:50%;background:rgba(251,191,36,0.18);color:#fbbf24;font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center;cursor:help; }
 .acct-skin { width:32px;height:32px;border-radius:8px;object-fit:cover;flex-shrink:0;image-rendering:pixelated;box-shadow:0 3px 10px rgba(0,0,0,0.35); }
 .btn-add-acct { padding:8px 10px;background:transparent;border:1px dashed rgba(255,255,255,0.13);border-radius:var(--radius-sm);color:var(--text-muted);font-size:12px;cursor:pointer;transition:all 0.15s;text-align:center;font-family:inherit;white-space:nowrap; }
 .btn-add-acct.icon-only { padding:8px;font-size:15px;border-radius:9px; }

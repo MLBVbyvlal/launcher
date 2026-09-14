@@ -12,6 +12,25 @@ export default defineConfig(async () => ({
     __APP_VERSION__: JSON.stringify("0.0.6"),
   },
 
+  build: {
+    // The whole UI used to ship as one 588 kB chunk, which vite warned about.
+    // Matched by module path rather than by package name, because the entry
+    // point is `react-dom/client` — a subpath that a `{ react: ["react-dom"] }`
+    // map leaves in the app chunk (verified: the map form shipped react-dom
+    // inside index, 384 kB).
+    rollupOptions: {
+      output: {
+        manualChunks: (id: string) => {
+          if (!id.includes("node_modules")) return undefined;
+          if (/[\\/](react|react-dom|scheduler)[\\/]/.test(id)) return "react";
+          if (/[\\/]framer-motion[\\/]/.test(id)) return "motion";
+          if (/[\\/](marked|dompurify)[\\/]/.test(id)) return "markdown";
+          return undefined;
+        },
+      },
+    },
+  },
+
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`
   //
   // 1. prevent Vite from obscuring rust errors
