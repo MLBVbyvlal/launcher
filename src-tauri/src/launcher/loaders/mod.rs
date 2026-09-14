@@ -360,5 +360,3 @@ pub(super) async fn prepare_loader_stage(
         }
     }
 }
-
-/// Fetch a Fabric/Quilt loader profile (a version-JSON overlay).

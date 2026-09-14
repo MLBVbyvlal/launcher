@@ -5,6 +5,7 @@ use anyhow::{anyhow, Context, Result};
 use std::path::PathBuf;
 use std::sync::atomic::AtomicU64;
 
+/// Fetch a Fabric/Quilt loader profile (a version-JSON overlay).
 pub(super) async fn fetch_meta_profile(
     ctx: &Ctx<'_>,
     api_base: &str,

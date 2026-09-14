@@ -245,9 +245,6 @@ pub(crate) fn migration_clean() -> MigrationReport {
     MigrationReport { deleted, freed_bytes, errors }
 }
 
-#[cfg_attr(mobile, tauri::mobile_entry_point)]
-
-
 // ─── Unit tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]

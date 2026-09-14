@@ -197,6 +197,7 @@ fn reinstall_instance(instance_name: String, full_wipe: bool) -> Result<(), Stri
     Ok(())
 }
 
+/// Cancel the launch of one instance; other launches in flight are untouched.
 #[tauri::command]
 fn cancel_download(app: tauri::AppHandle, instance_name: String) -> Result<(), String> {
     use std::sync::atomic::Ordering;
@@ -268,6 +269,7 @@ fn poll_jvm_output(offset: usize, instance_name: String, app: tauri::AppHandle) 
     JvmPollResult { lines: new_lines, new_offset, cleared: false }
 }
 
+#[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())

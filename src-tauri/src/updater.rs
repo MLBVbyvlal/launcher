@@ -292,9 +292,6 @@ pub(crate) fn open_url(app: tauri::AppHandle, url: String) -> Result<(), String>
     app.opener().open_url(url, None::<&str>).map_err(|e| e.to_string())
 }
 
-/// Cancel the launch of one instance; other launches in flight are untouched.
-
-
 // ─── Unit tests ──────────────────────────────────────────────────────────────
 
 #[cfg(test)]
