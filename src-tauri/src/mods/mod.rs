@@ -8,6 +8,7 @@
 //! - CurseForge needs the user's own API key (Settings → General). Prism
 //!   ships an official project key from Overwolf; we have none, so the key
 //!   field + a pointer to console.curseforge.com is the honest substitute.
+//!
 //! - Update checks compare the installed version id against the newest file
 //!   for this MC/loader instead of hashing jars Prism-style — there is no
 //!   sha512 crate in the tree and the lockfile cannot grow offline.

@@ -209,6 +209,14 @@ pub(super) fn push_json_args(
     }
 }
 
+/// User-tunable JVM settings, grouped so `build_launch_args` stays readable.
+pub(super) struct JvmOptions<'a> {
+    pub(super) max_ram_mb: u32,
+    pub(super) min_ram_mb: u32,
+    /// Raw extra flags from instance settings, whitespace-separated.
+    pub(super) extra_args: &'a str,
+}
+
 /// Build the full `java …` argument list. Order matters: loader JVM args first
 /// (they may add module paths), then the vanilla ones, then memory, main class,
 /// vanilla game args and finally the overlay game args — the same order an
@@ -220,9 +228,7 @@ pub(super) fn build_launch_args(
     replace: &impl Fn(&str) -> String,
     natives_dir: &Path,
     classpath_str: &str,
-    max_ram_mb: u32,
-    min_ram_mb: u32,
-    jvm_args: &str,
+    jvm: &JvmOptions<'_>,
 ) -> Vec<String> {
     let mut args: Vec<String> = Vec::new();
 
@@ -240,13 +246,13 @@ pub(super) fn build_launch_args(
     }
     // Clamp insanity: the JVM refuses to start with -Xmx0m, and a minimum
     // above the maximum is equally fatal.
-    let max_ram = max_ram_mb.max(512);
-    let min_ram = min_ram_mb.clamp(256, max_ram);
+    let max_ram = jvm.max_ram_mb.max(512);
+    let min_ram = jvm.min_ram_mb.clamp(256, max_ram);
     args.push(format!("-Xmx{max_ram}m"));
     args.push(format!("-Xms{min_ram}m"));
     // User JVM args go after the launcher defaults so they win on conflict
     // (a custom -Xmx in Settings → Java overrides the slider, by design).
-    for part in jvm_args.split_whitespace() {
+    for part in jvm.extra_args.split_whitespace() {
         args.push(part.to_string());
     }
     args.push(main_class.to_string());
@@ -288,7 +294,7 @@ pub(super) async fn download_assets_parallel(
     let sem  = Arc::new(Semaphore::new(concurrent.max(1) as usize));
     let done = Arc::new(AtomicUsize::new(0));
     let mut set = tokio::task::JoinSet::<()>::new();
-    for (_, obj) in objects {
+    for obj in objects.values() {
         if ctl.cancel.load(Ordering::Relaxed) { break; }
         let prefix   = obj.hash[..2].to_string();
         let hash     = obj.hash.clone();

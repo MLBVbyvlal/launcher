@@ -434,8 +434,8 @@ pub async fn launch(app: tauri::AppHandle, req: LaunchRequest) -> Result<()> {
         out
     };
 
-    let cmd_args = build_launch_args(&ver, &plan, &main_class, &replace,
-        &natives_dir, &classpath_str, req.max_ram_mb, req.min_ram_mb, &req.jvm_args);
+    let jvm = JvmOptions { max_ram_mb: req.max_ram_mb, min_ram_mb: req.min_ram_mb, extra_args: &req.jvm_args };
+    let cmd_args = build_launch_args(&ver, &plan, &main_class, &replace, &natives_dir, &classpath_str, &jvm);
 
     // ── 8. Spawn and track ──
     spawn_game(&app, &java, &cmd_args, &game_dir, &req.instance_name)?;

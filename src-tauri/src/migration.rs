@@ -129,13 +129,11 @@ pub(crate) fn migration_scan() -> MigrationScan {
     }
 
     // 4. Stale self-update packages in the temp dir (outside the data dir).
-    let tmp = std::env::temp_dir();
-    for name in ["mlbv-just-updated.txt"] {
-        let p = tmp.join(name);
-        if p.is_file() {
-            let bytes = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
-            garbage.push(MigrationGarbage { path: format!("(temp)/{name}"), bytes, kind: "temp" });
-        }
+    let name = "mlbv-just-updated.txt";
+    let p = std::env::temp_dir().join(name);
+    if p.is_file() {
+        let bytes = std::fs::metadata(&p).map(|m| m.len()).unwrap_or(0);
+        garbage.push(MigrationGarbage { path: format!("(temp)/{name}"), bytes, kind: "temp" });
     }
     if let Ok(rd) = std::fs::read_dir(&tmp) {
         for e in rd.flatten() {
@@ -150,7 +148,7 @@ pub(crate) fn migration_scan() -> MigrationScan {
         }
     }
 
-    garbage.sort_by(|a, b| b.bytes.cmp(&a.bytes));
+    garbage.sort_by_key(|g| std::cmp::Reverse(g.bytes));
     let total_bytes = garbage.iter().map(|g| g.bytes).sum();
     MigrationScan {
         garbage,
