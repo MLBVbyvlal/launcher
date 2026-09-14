@@ -23,34 +23,54 @@ Facts about the current state:
 - **Status: frozen.** Last *release*: `beta0.0.4`, dated 2026-06-14. No feature development;
   maintenance fixes (security, data integrity, broken updater) and the launch-pipeline
   consolidation were applied on 2026-09-12 — see §6 for what was fixed and what is still open.
-- History is squashed and unhelpful (original sprint: 15 commits over two days).
-- ~9 850 lines of first-party code: ~3 650 Rust (including tests), ~6 200 TypeScript/CSS
-  (measured 2026-09-13).
-- Unit/integration tests cover the pure helpers (`cargo test`, also run in CI);
-  **no linter, no formatter config.** The launch pipeline itself has no behaviour tests.
+- History is real: ~60 commits on `main` with meaningful messages and tags (`v0.0.3`, `v0.0.5`).
+  A shallow clone hides that — run `git fetch --unshallow` before judging it.
+- ~13 300 lines of first-party code: ~6 000 Rust (including tests), ~7 300 TypeScript/CSS
+  (measured 2026-09-14). No file exceeds 500 lines — that is a rule now (§2).
+- Unit/integration tests cover the pure helpers (`cargo test`, also run in CI). CI also runs
+  `cargo clippy -D warnings`, `tsc --noEmit` and ESLint (`eslint.config.js`); still no formatter
+  config. The launch pipeline itself has no behaviour tests.
 - All published releases are marked as GitHub *pre-releases*. The updater now considers them
   (fixed 2026-09-12; see §6, landmine 9).
 
 ### File map
 
+Line counts measured 2026-09-14; every file is ≤ 500 lines by rule (§2).
+
 | Path | Lines | Role |
 |---|---|---|
-| `src-tauri/src/lib.rs` | ~1300 | Tauri commands: Microsoft auth + refresh, LiquidBounce API, update check, console window, instance scanning/metadata, mod add/delete, download controls, the single `launch_game` command and the `generate_handler!` list |
-| `src-tauri/src/launcher.rs` | ~2360 | The launch pipeline (`launch` + the loader steps `prepare_loader` / `prepare_loader_stage`), per-instance process registry, Java provisioning, verified streaming downloads, legacy asset mapping, ZIP extraction, path helpers, `valid_instance_name` |
-| `src-tauri/src/mods.rs` | ~900 | Modrinth + CurseForge search/versions/install, per-instance mod index (`.mlbv-mods.json`), enable/disable (`.jar.disabled`), update checks |
+| `src-tauri/src/lib.rs` | ~330 | `pub mod` list, the commands that stay close to `launch_game` (Java scan/download, stop, logs, reinstall, download pause/cancel, reset) and the `generate_handler!` list |
+| `src-tauri/src/auth.rs` | ~265 | Microsoft login + refresh (`ms_token_chain`), vault commands (`vault_has_account`, `vault_forget_account`). Returns `MsAccount { username, uuid }` — never tokens |
+| `src-tauri/src/vault.rs` | ~200 | Token vault: `accounts.bin` under the mlbv base, DPAPI-sealed on Windows, mode 0600 elsewhere |
+| `src-tauri/src/updater.rs` | ~395 | GitHub release lookup, SHA-256-verified installer download (`digest` from the releases API), apply, `open_url` |
+| `src-tauri/src/instances.rs` | ~425 | LiquidBounce branches/builds, LB config install, `scan_instances`, metadata, rename/delete, mod file add/delete, loader version lists |
+| `src-tauri/src/migration.rs` | ~270 | Data-version bookkeeping and the 0.0.5 layout migration scan/clean |
+| `src-tauri/src/launcher/mod.rs` | ~445 | `launch` — the pipeline shared by every loader — plus `Ctx`, `LaunchRequest`, `Loader`, `valid_instance_name`, dir helpers |
+| `src-tauri/src/launcher/state.rs` | ~75 | `GameState` (running children, per-instance `DlControl`, JVM buffers), RAII guards |
+| `src-tauri/src/launcher/types.rs` | ~140 | Mojang launcher-meta JSON shapes |
+| `src-tauri/src/launcher/steps.rs` | ~335 | Parallel library/asset downloads, argument builder |
+| `src-tauri/src/launcher/loaders/` | ~965 | `mod.rs` (prepare before/after vanilla, installers), `overlay.rs` (meta profiles, overlay libs, Modrinth fetch), `lb.rs` (LiquidBounce mods + JCEF WebView) |
+| `src-tauri/src/launcher/java/` | ~515 | `mod.rs` (discovery, `ensure_java`, `scan_java_installs`), `provision.rs` (Adoptium download) |
+| `src-tauri/src/launcher/process.rs` | ~145 | Spawn, exit watch, JVM output buffer |
+| `src-tauri/src/launcher/util.rs` | ~255 | `download_file` (verified streaming), ZIP/natives, path + rule helpers, `mc_dir` |
+| `src-tauri/src/mods/` | ~925 | `mod.rs` (shapes + commands), `platforms.rs` (Modrinth/CurseForge HTTP, CDN allow-list), `local.rs` (`.mlbv-mods.json` index) |
 | `src-tauri/tests/` | ~60 | Integration tests: instance-name validation battery (black-box) |
 | `src-tauri/src/main.rs` | 6 | Windows entry point. Contains `windows_subsystem` — **do not touch** |
 | `src-tauri/tauri.conf.json` | 40 | Window, bundle targets, CSP, identifier |
 | `src-tauri/capabilities/*.json` | 34 | Tauri v2 permissions for the `main` and `console` windows |
-| `src/App.tsx` | ~3110 | The entire main UI, including every modal |
-| `src/ModBrowser.tsx` | ~320 | In-app mod browser: Modrinth/CurseForge tabs, debounced search, version picker, install |
-| `src/SetupWizard.tsx` | ~545 | First-run wizard: language → prefs → account → Java |
-| `src/ConsoleWindow.tsx` | ~190 | Separate window that streams the output of one instance |
+| `src/App.tsx` | ~465 | Orchestrator: state, boot, handlers; renders `Sidebar`, `MainArea`, `AppModals` |
+| `src/components/` | ~3 200 | One file per UI area: `Sidebar` (instance cards with the per-instance progress ring), `MainArea`, `LaunchCard` (per-launch progress, pause/cancel), `AppModals`, `CreateInstanceModal`, `SettingsModal`/`SettingsPanels`, `InstanceSettingsModal`, `InstanceDialogs`, `UpdateModal`, `SetupJavaShowcase`, `ui` |
+| `src/lib/` | ~480 | Hooks and helpers: `useLaunchQueue` (queue + per-instance progress/speed events), `useInstances`, `useBoot`, `useUpdateCheck`, `accent`, `migration`, `types` |
+| `src/ModBrowser.tsx` | ~325 | In-app mod browser: Modrinth/CurseForge tabs, debounced search, version picker, install |
+| `src/SetupWizard.tsx` | ~350 | First-run wizard: language → prefs → account → Java (`SetupJavaShowcase`) |
+| `src/ConsolePanel.tsx` | ~125 | Console tab streaming one instance's output |
 | `src/LbConfigsPanel.tsx` | ~470 | LiquidBounce configs catalog (GitHub-backed, README sanitized with DOMPurify) |
-| `src/i18n.ts` | ~705 | 258 keys per language, 516 total |
-| `src/App.css` | ~1340 | All styling |
-| `src/main.tsx` | 25 | Picks `App` or `ConsoleWindow` by window label |
-| `.github/workflows/ci.yml` | 112 | The only way to compile Rust in a restricted environment (§4) |
+| `src/MigrationScreen.tsx` | ~235 | 0.0.5 → 0.0.6 data migration UI |
+| `src/i18n/` | ~865 | `index.ts` (hook), `en.ts`, `ru.ts` — same key set in both |
+| `src/App.css` + `src/styles/` | ~1 400 | `App.css` only `@import`s `styles/{base,shell,modals,wizard,features}.css` |
+| `src/main.tsx` | 7 | Renders `App` |
+| `eslint.config.js` | ~30 | ESLint 9 flat config (TS + react-hooks), run in CI |
+| `.github/workflows/ci.yml` | ~230 | The only way to compile Rust in a restricted environment (§4) |
 
 ## 2. Hard rules
 
@@ -64,9 +84,16 @@ Facts about the current state:
 - Keep changes minimal and scoped to the request. No drive-by reformatting, renaming or
   "while I was here" edits.
 - Use `cargo check --locked` and keep `Cargo.lock` / `package-lock.json` committed and in sync.
-- Write user-facing strings through `src/i18n.ts` in **both** `en` and `ru`.
+- **No file over 500 lines.** Any source file (`.rs`, `.ts`, `.tsx`, `.css`) that would exceed
+  500 lines must be split into several files along its section banners (a module directory for
+  Rust, a `components/` / `lib/` / `styles/` file for the frontend). If your change pushes a file
+  past the limit, the split is part of the change — not a follow-up. Check with
+  `find src src-tauri/src -type f | xargs wc -l | sort -n | tail`.
+- Write user-facing strings through `src/i18n/` in **both** `en.ts` and `ru.ts`.
 - Keep TypeScript strict-clean: `npm run build` runs `tsc` with `strict`, `noUnusedLocals` and
   `noUnusedParameters`. `any` is not used anywhere in the codebase; keep it that way.
+- Keep `npm run lint` (ESLint) and `cargo clippy --all-targets -- -D warnings` clean — CI fails
+  on either. A clippy warning is a build break, not a nit.
 - Report honestly at the end, labelling each claim: what you changed (with files), what you verified
   and **how**, what you only reasoned about, and what you could not check at all.
 
@@ -86,6 +113,8 @@ Facts about the current state:
 - Never delete or modify user data directories in tests or scripts: `%APPDATA%\mlbv`,
   `~/.mlbv`, or the user's real `.minecraft`.
 - Never log, print or transmit access tokens, refresh tokens or `client_id`-derived secrets.
+  Tokens live only in the Rust vault (`vault.rs`); never return them from a command or store them
+  in `localStorage` again.
 - Never "fix" the LiquidBounce/cheat aspect of the project or add anything that circumvents
   Minecraft licensing or authentication. That is out of scope, permanently.
 - Never state that something "works" based on compilation alone. Compiling ≠ working.
@@ -276,9 +305,12 @@ Cite these instead of re-deriving, and fix one only if the task asks for it.
 Items marked **FIXED 2026-09-12** are resolved; the note explains the current mechanism so it is
 not accidentally "re-fixed" into a regression.
 
-1. **FIXED 2026-09-12 — Microsoft token refresh.** The refresh token is now stored in the account
-   (`App.tsx` `Account.refreshToken`/`tokenAt`, same in `SetupWizard.tsx`), and `handlePlay`
-   re-runs the chain via the `refresh_ms_token` command (`lib.rs`) when the session is >20 h old.
+1. **FIXED 2026-09-12 / moved 2026-09-14 — Microsoft tokens.** Tokens live in the Rust vault
+   (`vault.rs`, keyed by profile UUID); the frontend `Account` holds only `type`/`username`/`uuid`.
+   `launch_game` (`lib.rs`) reads the access token from the vault by UUID and refreshes it there
+   (`refresh_tokens`, `auth.rs`) when the stored session is stale; an account with no vault entry
+   (e.g. one migrated from a pre-0.0.6 `localStorage`) fails the launch with an explicit
+   "sign in again" error rather than being silently dropped from the list.
    `microsoft_login` and `refresh_ms_token` share `ms_token_chain`. Microsoft rotates refresh
    tokens — the frontend persists the new one from the response.
 2. **FIXED 2026-09-12 — instance persistence.** `save_instance_metadata` is called on
@@ -321,7 +353,7 @@ not accidentally "re-fixed" into a regression.
    `map_legacy_assets` (called from `download_assets_parallel`) hard-links each object into
    `assets/virtual/legacy/<index key>` for pre-1.7.3 indexes. `assetIndex`/`downloads` in
    `VersionJson` are non-optional — verify against real Mojang JSON before changing their types.
-9. **FIXED 2026-09-12 — updater.** `check_for_update` (`lib.rs`) considers all non-draft
+9. **FIXED 2026-09-12 — updater.** `check_for_update` (`updater.rs`) considers all non-draft
    releases, sorts by semver and returns the newest one newer than `CARGO_PKG_VERSION`;
    pre-release candidates set `unstable_warning`, and both installer URLs (`.exe`, `.msi`)
    travel in `ReleaseInfo` — the frontend only offers the ones present. Being up to date
@@ -387,8 +419,8 @@ quote the documentation. "I believe the field is called …" is not acceptable.
 - **Windows-first checks** use `cfg!(windows)` at runtime; platform paths use `cfg!(target_os)`.
 - **React state** is plain `useState`/`useEffect` with `framer-motion` for animation. No state
   library, no router — `main.tsx` routes by window label.
-- **Styling** is one `App.css` with CSS custom properties for theming (`--accent`, `--lb-accent`,
-  `--accent-rgb`). Do not add a CSS framework.
+- **Styling** is plain CSS under `src/styles/` (imported by `App.css`) with custom properties for
+  theming (`--accent`, `--lb-accent`, `--accent-rgb`). Do not add a CSS framework.
 - **Persisted keys** are prefixed `mlbv_` (`mlbv_accounts`, `mlbv_instances`, `mlbv_accent`, …).
   Keep the prefix and do not rename existing keys without a migration.
 - Commit messages: imperative subject, optionally a body explaining why. Do not add AI
@@ -396,9 +428,11 @@ quote the documentation. "I believe the field is called …" is not acceptable.
 
 ## 9. Definition of done
 
-- [ ] `npx tsc --noEmit` and `npm run build` pass.
-- [ ] `cargo check --locked` passes (locally or via CI — say which).
-- [ ] New user-facing text exists in `en` **and** `ru` in `src/i18n.ts`.
+- [ ] `npm run typecheck`, `npm run lint` and `npm run build` pass.
+- [ ] `cargo check --locked` and `cargo clippy --all-targets -- -D warnings` pass (locally or via
+      CI — say which).
+- [ ] No file is over 500 lines (§2).
+- [ ] New user-facing text exists in `en` **and** `ru` in `src/i18n/`.
 - [ ] No new dead code, no new `let _ =` around fallible work without justification.
 - [ ] If a command name, invocation argument or data path changed, frontend and backend were both
       updated and both were grepped for the old name.

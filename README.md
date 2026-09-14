@@ -163,35 +163,44 @@ directory. The launcher keeps its own tree:
 | `mlbv\shared\java\jre-{N}\` | Java runtimes installed by the launcher |
 | `mlbv\instances\{name}\` | The game directory of one instance (mods, configs, saves, logs, extracted natives) |
 
-Accounts, tokens and the instance list are stored in the WebView's `localStorage`
-(`%APPDATA%\com.vlal.mlbv\` on Windows). They are per-machine, never synced or exported — and,
-because of that, a project folder copied to another machine will not appear in the launcher until
-it is re-created by hand. See [Known limitations](#known-limitations).
+Account names and the instance list are stored in the WebView's `localStorage`
+(`%APPDATA%\com.vlal.mlbv\` on Windows). Microsoft tokens never reach the WebView: they are kept
+in `mlbv\accounts.bin`, sealed with DPAPI on Windows (mode 0600 on Linux). Both are per-machine,
+never synced or exported — and, because of that, a project folder copied to another machine will
+not appear in the launcher until it is re-created by hand. See [Known limitations](#known-limitations).
 
 ## Architecture
 
+Every source file is kept under 500 lines (see `AGENTS.md` §2), so the tree is wide rather than deep:
+
 ```
 src-tauri/
-  src/main.rs       Windows entry point (windows_subsystem attribute — keep it)
-  src/lib.rs        Tauri commands: Microsoft auth, LiquidBounce API, update check,
-                    console window, instance scanning, mods, download controls
-  src/launcher.rs   One launch pipeline with per-loader steps (vanilla / LiquidBounce /
-                    Fabric / Quilt / Forge / NeoForge), the per-instance process
-                    registry, Java provisioning, ZIP extraction, helpers
-  tests/            Integration tests (instance-name validation battery)
-  tauri.conf.json   Window config, bundle targets, identifier (com.vlal.mlbv)
-  capabilities/     Tauri v2 permission sets for the main and console windows
+  src/main.rs         Windows entry point (windows_subsystem attribute — keep it)
+  src/lib.rs          Module list, launch_game + process/download commands, generate_handler!
+  src/auth.rs         Microsoft login/refresh; tokens go to the vault, the UI gets name + uuid
+  src/vault.rs        Token vault (accounts.bin, DPAPI on Windows)
+  src/updater.rs      GitHub release check, SHA-256-verified installer download, apply
+  src/instances.rs    LiquidBounce API, instance scanning/metadata/rename/delete, mod files
+  src/migration.rs    0.0.5 → 0.0.6 data layout migration
+  src/launcher/       One launch pipeline with per-loader steps: mod.rs (launch), state.rs,
+                      types.rs, steps.rs, loaders/{mod,overlay,lb}.rs, java/{mod,provision}.rs,
+                      process.rs, util.rs
+  src/mods/           Modrinth/CurseForge browser backend: mod.rs, platforms.rs, local.rs
+  tests/              Integration tests (instance-name validation battery)
+  tauri.conf.json     Window config, bundle targets, identifier (com.vlal.mlbv)
+  capabilities/       Tauri v2 permission sets
 src/
-  App.tsx           Main UI — every modal lives in this file
-  SetupWizard.tsx   First-run wizard
-  ConsoleWindow.tsx Separate console window (loads the same bundle, routed in main.tsx)
-  LbConfigsPanel.tsx LiquidBounce configs catalog
-  i18n.ts           English/Russian strings
-  App.css           All styling
+  App.tsx             Orchestrator; renders components/Sidebar, MainArea, AppModals
+  components/         One file per UI area (modals, sidebar, launch cards, settings, wizard step)
+  lib/                Hooks: useLaunchQueue, useInstances, useBoot, useUpdateCheck + helpers
+  SetupWizard.tsx     First-run wizard
+  ConsolePanel.tsx    Console tab streaming one instance's output
+  LbConfigsPanel.tsx  LiquidBounce configs catalog
+  i18n/               English/Russian strings (en.ts, ru.ts)
+  styles/             CSS, imported through App.css
 ```
 
-The frontend decides which window it is at runtime: `main.tsx` calls `get_window_type` and renders
-`App` or `ConsoleWindow` accordingly. Window labels are `main` and `console`.
+There is a single window; the console is a tab inside it (`ConsolePanel.tsx`).
 
 ## External services
 
@@ -220,11 +229,11 @@ Verified against the code, not guessed:
    GitHub releases and offers the newest one that is newer than the running build; candidates marked
    pre-release are shown with a warning. Check failures are no longer swallowed silently — they are
    shown in Settings → About.
-2. **One launch at a time.** Several instances can run side by side, but the download queue and its
-   progress/speed events are global, so a second *launch* is refused ("Another game is launching")
-   until the first one has started. There is also a single console window: opening it for another
-   instance closes the previous one.
-3. **Tests cover the pure helpers only, and there is no linter.** `cargo test` (unit tests next to the code plus `src-tauri/tests/`, run in CI) pins down instance-name validation, version parsing, stability markers, ZIP path guards and Java probing — but the launch pipeline itself has no automated behaviour tests.
+2. **Launches are queued.** Pressing Play on several instances is allowed; they download one after
+   another (each instance shows its own progress ring in the sidebar and its own launch card), and
+   two instances that need the same Minecraft version wait for the in-flight download instead of
+   fetching it twice.
+3. **Tests cover the pure helpers only.** ESLint, `clippy -D warnings` and `cargo test` (unit tests next to the code plus `src-tauri/tests/`) run in CI and pin down instance-name validation, version parsing, stability markers, ZIP path guards and Java probing — but the launch pipeline itself has no automated behaviour tests.
 4. **Instance recovery is name-based.** If a `.mlbv-instance.json` metadata file is missing or
    corrupt, a recovered instance falls back to a filesystem guess (LiquidBounce instances lose their
    build id and must be re-picked before launching).

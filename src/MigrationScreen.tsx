@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { motion } from 'framer-motion'
 import { invoke } from '@tauri-apps/api/core'
 import { getLang, useT } from './i18n'
-import type { Instance, MCVersion } from './App'
+import type { Instance, MCVersion } from './lib/types'
 
 export interface GarbageItem {
   path: string

@@ -9,7 +9,7 @@ export default defineConfig(async () => ({
   plugins: [react()],
 
   define: {
-    __APP_VERSION__: JSON.stringify("0.0.5"),
+    __APP_VERSION__: JSON.stringify("0.0.6"),
   },
 
   // Vite options tailored for Tauri development and only applied in `tauri dev` or `tauri build`

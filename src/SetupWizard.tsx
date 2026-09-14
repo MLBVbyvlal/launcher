@@ -1,19 +1,15 @@
-import { useState, useEffect, useRef, useCallback, useMemo } from 'react'
+import { useState, useRef, useCallback } from 'react'
 import { motion, AnimatePresence } from 'framer-motion'
 import { invoke } from '@tauri-apps/api/core'
-import { listen } from '@tauri-apps/api/event'
 import { type Lang, useT } from './i18n'
-import lbLogo from './assets/lb-logo.svg'
 import msLogo from './assets/ms-logo.png'
+import SetupJavaShowcase from './components/SetupJavaShowcase'
 
 const isTauri = typeof window !== 'undefined' && '__TAURI_INTERNALS__' in window
 const spring   = { type: 'spring', stiffness: 340, damping: 28 } as const
-const JAVA_MAJORS = [8, 17, 21, 25] as const
 
-type Account    = { type: 'offline' | 'microsoft'; username: string; uuid: string; accessToken?: string; refreshToken?: string; tokenAt?: number }
+type Account    = { type: 'offline' | 'microsoft'; username: string; uuid: string }
 type StepId     = 'welcome' | 'prefs' | 'account' | 'offline-warn' | 'nick' | 'nick-warn' | 'ms-loading' | 'java'
-type JavaStatus = 'pending' | 'already' | 'downloading' | 'installing' | 'done' | 'error'
-interface JavaDl { major: number; status: JavaStatus; progress: number; message: string }
 
 const RAM_MARKS = [
   { v: 512,   label: '512 MB', pct: 0    },
@@ -21,15 +17,6 @@ const RAM_MARKS = [
   { v: 8192,  label: '8 GB',   pct: 48.4 },
   { v: 16384, label: '16 GB',  pct: 100  },
 ]
-
-const SHOWCASE_FEATS = [
-  { id: 'lb',        icon: 'lb-logo', theme: 'lb'      as const },
-  { id: 'dl',        icon: '⚡',       theme: 'default' as const },
-  { id: 'java',      icon: '☕',       theme: 'default' as const },
-  { id: 'offline',   icon: '🌐',       theme: 'default' as const },
-  { id: 'instances', icon: '📦',       theme: 'default' as const },
-  { id: 'custom',    icon: '🎛',       theme: 'default' as const },
-] as const
 
 function validateNick(s: string): 'short' | 'long' | 'chars' | null {
   if (s.length < 3)  return 'short'
@@ -71,6 +58,7 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
 
   const [step, setStep] = useState<StepId>('welcome')
   const [dir,  setDir]  = useState(1)
+  const [isLbTheme, setIsLbTheme] = useState(false)
 
   const [ram,           setRam]           = useState(2048)
   const [concurrent,    setConcurrent]    = useState(5)
@@ -83,124 +71,20 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
   const [nickError,   setNickError]   = useState('')
   const [nickForWarn, setNickForWarn] = useState('')
 
-  const [javaDl, setJavaDl] = useState<JavaDl[]>(
-    JAVA_MAJORS.map(m => ({ major: m, status: 'pending' as JavaStatus, progress: 0, message: '' }))
-  )
-  const [javaAllDone, setJavaAllDone] = useState(false)
-  const [canFinish,   setCanFinish]   = useState(false)
-  const finishTimerRef                = useRef<ReturnType<typeof setTimeout> | null>(null)
-  const unlistenJavaRef               = useRef<(() => void) | null>(null)
-
-  const [featIdx,      setFeatIdx]      = useState(0)
-  const [autoProgress, setAutoProgress] = useState(0)
-
-  const isLbTheme = step === 'java' && SHOWCASE_FEATS[featIdx].theme === 'lb'
-
-  const overallJavaProgress = useMemo(() => {
-    if (!javaDl.length) return 0
-    const sum = javaDl.reduce((acc, d) =>
-      acc + (d.status === 'already' || d.status === 'done' ? 100
-           : d.status === 'downloading' || d.status === 'installing' ? d.progress
-           : 0), 0)
-    return Math.round(sum / javaDl.length)
-  }, [javaDl])
-
   const goTo = useCallback((next: StepId, forward = true) => {
     setDir(forward ? 1 : -1)
     setStep(next)
   }, [])
-
-  // ── Auto-advance showcase every 10 s ─────────────────────────────────────
-  useEffect(() => {
-    if (step !== 'java') return
-    const start = Date.now()
-    setAutoProgress(0)
-    const tickId = setInterval(() => {
-      setAutoProgress(Math.min(100, ((Date.now() - start) / 10_000) * 100))
-    }, 80)
-    const advId = setTimeout(() => {
-      setFeatIdx(i => (i + 1) % SHOWCASE_FEATS.length)
-    }, 10_000)
-    return () => { clearInterval(tickId); clearTimeout(advId) }
-  }, [step, featIdx])
-
-  // ── Java downloads ────────────────────────────────────────────────────────
-  const startJavaSetup = useCallback(async () => {
-    localStorage.setItem('mlbv_ram',             String(ram))
-    localStorage.setItem('mlbv_concurrent',      String(concurrent))
-    localStorage.setItem('mlbv_close_on_launch', closeOnLaunch ? '1' : '')
-
-    if (!isTauri) {
-      setJavaDl(JAVA_MAJORS.map(m => ({ major: m, status: 'already' as JavaStatus, progress: 100, message: '' })))
-      setJavaAllDone(true)
-      finishTimerRef.current = setTimeout(() => setCanFinish(true), 5000)
-      return
-    }
-
-    unlistenJavaRef.current?.()
-    const unlisten = await listen<{ major: number; progress: number; message: string; status: JavaStatus }>(
-      'java-progress',
-      e => {
-        const { major, progress, message, status } = e.payload
-        setJavaDl(prev => {
-          const next = prev.map(d => d.major === major ? { ...d, status, progress, message } : d)
-          if (next.every(d => d.status === 'done' || d.status === 'already' || d.status === 'error')) {
-            setJavaAllDone(true)
-            finishTimerRef.current = setTimeout(() => setCanFinish(true), 5000)
-          }
-          return next
-        })
-      }
-    )
-    unlistenJavaRef.current = unlisten
-
-    let installed: number[] = []
-    try {
-      const scanned = await invoke<{ major: number; path: string }[]>('scan_java')
-      installed = scanned.map(j => j.major)
-    } catch { /* ignore */ }
-
-    // Exact major match only — Java 25 on PATH does NOT substitute for Java 8/17/21
-    setJavaDl(prev =>
-      prev.map(d =>
-        installed.some(m => m === d.major)
-          ? { ...d, status: 'already' as JavaStatus, progress: 100 }
-          : d
-      )
-    )
-
-    const missing = JAVA_MAJORS.filter(m => !installed.some(i => i === m))
-    if (missing.length === 0) {
-      setJavaAllDone(true)
-      finishTimerRef.current = setTimeout(() => setCanFinish(true), 5000)
-      return
-    }
-    for (const major of missing) {
-      invoke('download_java', { major }).catch(() => {
-        setJavaDl(prev => prev.map(d => d.major === major ? { ...d, status: 'error' as JavaStatus, progress: 0 } : d))
-      })
-    }
-  }, [ram, concurrent, closeOnLaunch])
-
-  useEffect(() => {
-    if (step === 'java') startJavaSetup()
-    return () => {
-      if (step === 'java') {
-        unlistenJavaRef.current?.()
-        if (finishTimerRef.current) clearTimeout(finishTimerRef.current)
-      }
-    }
-  }, [step]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── MS auth ───────────────────────────────────────────────────────────────
   const handleMsLogin = useCallback(async () => {
     goTo('ms-loading')
     setMsError('')
     try {
-      type Raw = { username: string; uuid: string; access_token: string; refresh_token: string }
+      type Raw = { username: string; uuid: string }
+      // Tokens stay in the Rust vault; only the profile comes back.
       const raw = await invoke<Raw>('microsoft_login')
-      // Keep the refresh token so the session can outlive the 24 h access token.
-      pendingAccount.current = { type: 'microsoft', username: raw.username, uuid: raw.uuid, accessToken: raw.access_token, refreshToken: raw.refresh_token, tokenAt: Date.now() }
+      pendingAccount.current = { type: 'microsoft', username: raw.username, uuid: raw.uuid }
       goTo('java')
     } catch (e) {
       setMsError(String(e))
@@ -215,12 +99,6 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
     if (!/^[a-zA-Z][a-zA-Z0-9_]{2,15}$/.test(nick)) { setNickForWarn(nick); goTo('nick-warn'); return }
     pendingAccount.current = { type: 'offline', username: nick, uuid: crypto.randomUUID() }
     goTo('java')
-  }
-
-  const handleFinish = () => {
-    localStorage.setItem('mlbv_setup_done', '1')
-    localStorage.setItem('mlbv_lang', lang)
-    onDone(lang, pendingAccount.current)
   }
 
   // ── Render ────────────────────────────────────────────────────────────────
@@ -455,92 +333,17 @@ export default function SetupWizard({ onDone }: { onDone: (lang: Lang, account: 
         </div>
 
       ) : (
-
-        /* ── Full-screen features showcase ── */
-        <div className="sw-java-showcase">
-
-          {/* Thin auto-advance timer bar at top */}
-          <div className="sw-timer-bar">
-            <div className="sw-timer-fill" style={{ width: `${autoProgress}%` }} />
-          </div>
-
-          {/* Feature stage — fills available space */}
-          <div className="sw-showcase-stage">
-            <AnimatePresence mode="wait">
-              <motion.div key={featIdx} className="sw-showcase-feat"
-                initial={{ opacity: 0, y: 32 }}
-                animate={{ opacity: 1, y: 0 }}
-                exit={{ opacity: 0, y: -32 }}
-                transition={{ duration: 0.38, ease: [0.4, 0, 0.2, 1] }}
-              >
-                <div className="sw-feat-big-icon">
-                  {SHOWCASE_FEATS[featIdx].icon === 'lb-logo'
-                    ? <img src={lbLogo} alt="LiquidBounce" className="sw-feat-lb-big" draggable={false} />
-                    : <span className="sw-feat-emoji">{SHOWCASE_FEATS[featIdx].icon}</span>
-                  }
-                </div>
-                <div className="sw-feat-name">{t(`feat.${SHOWCASE_FEATS[featIdx].id}`)}</div>
-                <div className="sw-feat-desc">{t(`feat.${SHOWCASE_FEATS[featIdx].id}_d`)}</div>
-              </motion.div>
-            </AnimatePresence>
-          </div>
-
-          {/* Bottom — fixed min-height prevents layout shift when button appears */}
-          <div className="sw-showcase-bottom">
-
-            {/* Navigation dots */}
-            <div className="sw-feat-nav-dots">
-              {SHOWCASE_FEATS.map((_, i) => (
-                <button key={i}
-                  className={`sw-feat-nav-dot${i === featIdx ? ' active' : ''}`}
-                  onClick={() => setFeatIdx(i)}
-                />
-              ))}
-            </div>
-
-            {/* Java overall progress strip */}
-            <div className="sw-java-dl-strip">
-              <div className="sw-java-dl-label">
-                {javaAllDone
-                  ? t('sw.java.all_ready')
-                  : t('sw.java.dl_progress').replace('{0}', String(overallJavaProgress))
-                }
-              </div>
-              <div className="sw-java-dl-track">
-                <motion.div className="sw-java-dl-fill"
-                  animate={{ width: `${overallJavaProgress}%` }}
-                  transition={{ duration: 0.4, ease: 'easeOut' }}
-                />
-              </div>
-            </div>
-
-            {/* Launch button slot — min-height pre-reserves space */}
-            <div className="sw-launch-wrap">
-              <AnimatePresence mode="wait">
-                {canFinish ? (
-                  <motion.button key="btn-launch"
-                    className="sw-btn-primary sw-btn-launch"
-                    onClick={handleFinish}
-                    initial={{ opacity: 0, scale: 0.92, y: 8 }}
-                    animate={{ opacity: 1, scale: 1, y: 0 }}
-                    exit={{ opacity: 0 }}
-                    transition={spring}
-                  >
-                    {t('sw.java.finish')} →
-                  </motion.button>
-                ) : (
-                  <motion.div key="lbl-wait" className="sw-java-wait"
-                    initial={{ opacity: 0 }} animate={{ opacity: 1 }} exit={{ opacity: 0 }}
-                  >
-                    <span className="ms-spinner" style={{ width: 12, height: 12, borderWidth: 2 }} />
-                    <span>{t('sw.java.wait')}</span>
-                  </motion.div>
-                )}
-              </AnimatePresence>
-            </div>
-
-          </div>
-        </div>
+        <SetupJavaShowcase lang={lang} onThemeChange={setIsLbTheme}
+          onStart={() => {
+            localStorage.setItem('mlbv_ram',             String(ram))
+            localStorage.setItem('mlbv_concurrent',      String(concurrent))
+            localStorage.setItem('mlbv_close_on_launch', closeOnLaunch ? '1' : '')
+          }}
+          onFinish={() => {
+            localStorage.setItem('mlbv_setup_done', '1')
+            localStorage.setItem('mlbv_lang', lang)
+            onDone(lang, pendingAccount.current)
+          }} />
       )}
     </div>
   )

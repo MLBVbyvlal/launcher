@@ -97,7 +97,7 @@ export default function ModBrowser({ instanceName, mcVersion, loader, cfKey, ins
 
   const runSearch = useCallback(async (src: Source, q: string, off: number, append: boolean) => {
     if (!isTauri) return
-    append ? setLoadingMore(true) : setLoading(true)
+    if (append) setLoadingMore(true); else setLoading(true)
     setError('')
     setKeyIssue(null)
     try {

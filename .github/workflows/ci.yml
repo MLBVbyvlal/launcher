@@ -14,7 +14,7 @@ concurrency:
 jobs:
   # ── 1. Frontend: type-check + production bundle ─────────────────────────────
   frontend:
-    name: Frontend (tsc + vite build)
+    name: Frontend (tsc + eslint + vite build)
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -28,7 +28,10 @@ jobs:
         run: npm ci
 
       - name: Type-check (tsc --noEmit)
-        run: npx tsc --noEmit
+        run: npm run typecheck
+
+      - name: ESLint
+        run: npm run lint
 
       - name: Vite production build
         run: npm run build
@@ -53,6 +56,8 @@ jobs:
             pkg-config
 
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
 
       - uses: Swatinem/rust-cache@v2
         with:
@@ -75,6 +80,25 @@ jobs:
       - name: cargo test --locked
         working-directory: src-tauri
         run: cargo test --locked
+
+      # Warnings are errors: an unused import or a needless clone fails the
+      # build here rather than piling up in the log.
+      - name: cargo clippy --locked --all-targets -- -D warnings
+        working-directory: src-tauri
+        run: |
+          set +e
+          cargo clippy --locked --all-targets --message-format=json -- -D warnings > /tmp/clippy.json 2> /tmp/clippy.err
+          code=$?
+          set -e
+          exit $code
+
+      - name: Surface clippy findings as annotations
+        if: failure()
+        run: |
+          jq -r 'select(.reason=="compiler-message") | .message | select(.level=="error" or .level=="warning")
+                 | (.spans[0] // {}) as $s
+                 | "::\(.level) file=src-tauri/\($s.file_name // "src/main.rs"),line=\($s.line_start // 1),col=\($s.column_start // 1)::\(.message | gsub("%";"%25") | gsub("[\r\n]+";" ") | .[0:400])"' \
+            /tmp/clippy.json 2>/dev/null | head -80 || true
 
       # Raw job logs live on *.blob.core.windows.net, which restricted sandboxes
       # cannot reach; annotations are served from api.github.com instead, so a
