@@ -14,11 +14,6 @@ on:
       mc_version:
         description: 'Vanilla version to boot'
         default: '1.20.1'
-  # TEMPORARY (proving the workflow itself): the sandbox token cannot call
-  # workflow_dispatch (403), so this runs once on push and goes back to
-  # manual-only right after the first green proof.
-  push:
-    branches: [arena/01a09a44-launcher]
 
 jobs:
   proof:

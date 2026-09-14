@@ -1,6 +1,6 @@
 [package]
 name = "mlbv"
-version = "0.0.5"
+version = "0.0.6"
 description = "Minecraft Launcher by vlalikoffc"
 authors = ["vlalikoffc"]
 edition = "2021"
@@ -32,4 +32,12 @@ zip = "0.6"
 # std has no SHA-1; Mojang manifests publish SHA-1 hashes used to verify
 # client JARs, libraries and assets after download.
 sha1 = "0.10"
+# Release assets carry a SHA-256 digest in the GitHub API; the updater
+# verifies the downloaded installer against it before running it.
+sha2 = "0.10"
+
+# DPAPI for the account token vault (vault.rs). windows-sys is already in the
+# dependency graph through tauri; only the two feature gates are new.
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.59", features = ["Win32_Foundation", "Win32_Security_Cryptography"] }
 

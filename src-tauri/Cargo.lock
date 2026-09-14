@@ -2179,18 +2179,20 @@ dependencies = [
 
 [[package]]
 name = "mlbv"
-version = "0.0.5"
+version = "0.0.6"
 dependencies = [
  "anyhow",
  "reqwest 0.12.28",
  "serde",
  "serde_json",
  "sha1",
+ "sha2",
  "tauri",
  "tauri-build",
  "tauri-plugin-opener",
  "tokio",
  "url",
+ "windows-sys 0.59.0",
  "zip",
 ]
 
